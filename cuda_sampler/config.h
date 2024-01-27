@@ -1,4 +1,7 @@
 /*
+ * This is a modified version of the diff-gaussian-rasterization.
+ * The original license still applies, see the original copyright notice below:
+ *
  * Copyright (C) 2023, Inria
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
@@ -9,10 +12,9 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
-#include <torch/extension.h>
-#include "sample_points.h"
+#ifndef CUDA_SAMPLER_CONFIG_H_INCLUDED
+#define CUDA_SAMPLER_CONFIG_H_INCLUDED
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("sample_gaussians", &SampleGaussiansCUDA);
-  m.def("sample_gaussians_backward", &SampleGaussiansBackwardCUDA);
-}
+#define BLOCK_SIZE 1.0f
+
+#endif
