@@ -1,4 +1,7 @@
 /*
+ * This is a modified version of the diff-gaussian-rasterization.
+ * The original license still applies, see the original copyright notice below:
+ *
  * Copyright (C) 2023, Inria
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
@@ -9,8 +12,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
-#ifndef CUDA_RASTERIZER_FORWARD_H_INCLUDED
-#define CUDA_RASTERIZER_FORWARD_H_INCLUDED
+#ifndef CUDA_SAMPLER_FORWARD_H_INCLUDED
+#define CUDA_SAMPLER_FORWARD_H_INCLUDED
 
 #include <cuda.h>
 #include "cuda_runtime.h"
@@ -18,18 +21,20 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
-namespace FORWARD
-{
+#include "config.h"
+
+namespace FORWARD {
 	// Perform initial steps for each Gaussian prior to rasterization.
-	void preprocess(const int P, const int D, const int N, const int C,
-		const float* means,
-		const float* values,
-		const float* covariances,
-		const float* conics,
-		const float* opacities,
-		float* radii,
+	void preprocess(
+		const int P, const int D, const int N, const int C,
+		const FLOAT* means,
+		const FLOAT* values,
+		const FLOAT* covariances,
+		const FLOAT* conics,
+		const FLOAT* opacities,
+		FLOAT* radii,
 		const int* grid,
-		const float* grid_offset,
+		const FLOAT* grid_offset,
 		uint32_t* tiles_touched);
 
 	// Main rasterization method.
@@ -40,12 +45,12 @@ namespace FORWARD
 		const uint2* sample_ranges,
 		const uint32_t* point_list,
 		const uint32_t* sample_point_list,
-		const float* mean,
-		const float* value,
-		const float* conic,
-		const float* opacity,
-		const float* samples,
-		float* out_value);
+		const FLOAT* means,
+		const FLOAT* values,
+		const FLOAT* conics,
+		const FLOAT* opacities,
+		const FLOAT* samples,
+		FLOAT* out_value);
 }
 
 

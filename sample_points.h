@@ -17,7 +17,7 @@
 #include <cstdio>
 #include <tuple>
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -27,20 +27,17 @@ SampleGaussiansCUDA(
     const torch::Tensor& samples,
     const bool debug);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
-    const torch::Tensor& radii,
     const torch::Tensor& values,
-    const torch::Tensor& covariances,
     const torch::Tensor& conics,
     const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL,
-    const torch::Tensor& geomBuffer,
-    const torch::Tensor& binningBuffer,
-    const torch::Tensor& sample_binningBuffer,
+    const torch::Tensor& binning_buffer,
+    const torch::Tensor& sample_binning_buffer,
     const torch::Tensor& ranges,
-	const torch::Tensor& sample_ranges,
+    const torch::Tensor& sample_ranges,
     const bool debug);

@@ -1,4 +1,7 @@
 /*
+ * This is a modified version of the diff-gaussian-rasterization.
+ * The original license still applies, see the original copyright notice below:
+ *
  * Copyright (C) 2023, Inria
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
@@ -15,4 +18,8 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("sample_gaussians", &SampleGaussiansCUDA);
   m.def("sample_gaussians_backward", &SampleGaussiansBackwardCUDA);
+  // m.def("sample_gaussians_derivatives", &SampleGaussiansCUDA);
+  // m.def("sample_gaussians_derivatives_backward", &SampleGaussiansBackwardCUDA);
+  // m.def("sample_gaussians_derivatives2", &SampleGaussiansCUDA);
+  // m.def("sample_gaussians_derivatives2_backward", &SampleGaussiansBackwardCUDA);
 }

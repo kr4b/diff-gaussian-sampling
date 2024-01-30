@@ -65,41 +65,38 @@ class _SampleGaussians(torch.autograd.Function):
         if debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                num_rendered, values, radii, geomBuffer, binningBuffer, sample_binningBuffer, ranges, sample_ranges = _C.sample_gaussians(*args)
+                num_rendered, out_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges = _C.sample_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
                 print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, values, radii, geomBuffer, binningBuffer, sample_binningBuffer, ranges, sample_ranges = _C.sample_gaussians(*args)
+            num_rendered, out_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges = _C.sample_gaussians(*args)
 
         # Keep relevant tensors for backward
         ctx.debug = debug
         ctx.num_rendered = num_rendered
-        ctx.save_for_backward(means, radii, values, covariances, conics, opacities, samples, geomBuffer, binningBuffer, sample_binningBuffer, ranges, sample_ranges)
-        return values, radii
+        ctx.save_for_backward(means, values, conics, opacities, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges)
+        return out_values
 
     @staticmethod
-    def backward(ctx, grad_out, _):
+    def backward(ctx, grad_out):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         debug = ctx.debug
-        means, radii, values, covariances, conics, opacities, samples, geomBuffer, binningBuffer, sample_binningBuffer, ranges, sample_ranges = ctx.saved_tensors
+        means, values, conics, opacities, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
         args = (means,
-                radii, 
                 values,
-                covariances,
                 conics,
                 opacities,
                 samples,
                 num_rendered,
                 grad_out,
-                geomBuffer,
-                binningBuffer,
-                sample_binningBuffer,
+                binning_buffer,
+                sample_binning_buffer,
                 ranges,
                 sample_ranges,
                 debug)
@@ -108,18 +105,18 @@ class _SampleGaussians(torch.autograd.Function):
         if debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                grad_means, grad_values, grad_covariances, grad_conics, grad_opacities, grad_samples = _C.sample_gaussians_backward(*args)
+                grad_means, grad_values, grad_conics, grad_opacities, grad_samples = _C.sample_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
                 print("\nAn error occured in backward. Writing snapshot_bw.dump for debugging.\n")
                 raise ex
         else:
-             grad_means, grad_values, grad_covariances, grad_conics, grad_opacities, grad_samples = _C.sample_gaussians_backward(*args)
+             grad_means, grad_values, grad_conics, grad_opacities, grad_samples = _C.sample_gaussians_backward(*args)
 
         grads = (
             grad_means,
             grad_values,
-            grad_covariances,
+            None,
             grad_conics,
             grad_opacities,
             grad_samples,

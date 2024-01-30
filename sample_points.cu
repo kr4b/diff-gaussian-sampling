@@ -26,7 +26,7 @@
 #include <fstream>
 #include <string>
 
-std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
+std::function<char*(size_t N)> resize_functional(torch::Tensor& t) {
     auto lambda = [&t](size_t N) {
         t.resize_({(long long)N});
         return reinterpret_cast<char*>(t.contiguous().data_ptr());
@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -44,114 +44,126 @@ SampleGaussiansCUDA(
     const torch::Tensor& samples,
     const bool debug)
 {
-  const int P = means.size(0);
-  const int D = means.size(-1);
-  const int N = samples.size(0);
-  const int C = values.size(-1);
+    const int P = means.size(0);
+    const int D = means.size(-1);
+    const int N = samples.size(0);
+    const int C = values.size(-1);
 
-  auto int_opts = means.options().dtype(torch::kInt32);
-  auto float_opts = means.options().dtype(torch::kFloat32);
+    auto int_opts = means.options().dtype(torch::kInt32);
+    auto float_opts = means.options().dtype(means.dtype());
 
-  torch::Tensor out_values = torch::full({N, C}, 0.0, float_opts);
-  torch::Tensor radii = torch::full({P}, 0, float_opts);
+    torch::Tensor radii = torch::full({P}, 0, float_opts);
+    torch::Tensor out_values = torch::full({N, C}, 0.0, float_opts);
 
-  torch::Device device(torch::kCUDA);
-  torch::TensorOptions options(torch::kByte);
-  torch::Tensor geomBuffer = torch::empty({0}, options.device(device));
-  torch::Tensor binningBuffer = torch::empty({0}, options.device(device));
-  torch::Tensor sample_binningBuffer = torch::empty({0}, options.device(device));
-  std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
-  std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
-  std::function<char*(size_t)> sample_binningFunc = resizeFunctional(sample_binningBuffer);
+    torch::Device device(torch::kCUDA);
+    torch::TensorOptions options(torch::kByte);
+    torch::Tensor geom_buffer = torch::empty({0}, options.device(device));
+    torch::Tensor binning_buffer = torch::empty({0}, options.device(device));
+    torch::Tensor sample_binning_buffer = torch::empty({0}, options.device(device));
+    std::function<char*(size_t)> geom_func = resize_functional(geom_buffer);
+    std::function<char*(size_t)> binning_func = resize_functional(binning_buffer);
+    std::function<char*(size_t)> sample_binning_func = resize_functional(sample_binning_buffer);
 
-  const torch::Tensor min_bound = std::get<0>(samples.min(0));
-  const torch::Tensor max_bound = std::get<0>(samples.max(0));
+    const torch::Tensor min_bound = std::get<0>(samples.min(0));
+    const torch::Tensor max_bound = std::get<0>(samples.max(0));
 
-  const torch::Tensor tile_grid = torch::ceil((max_bound - min_bound + 1e-6f) / BLOCK_SIZE).to(torch::kInt32);
-  const int blocks = torch::prod(tile_grid).item<int>();
+    const torch::Tensor tile_grid = torch::ceil((max_bound - min_bound + 1e-6f) / BLOCK_SIZE).to(torch::kInt32);
+    const int blocks = torch::prod(tile_grid).item<int>();
 
-  torch::Tensor ranges = torch::full({blocks * (long) sizeof(uint2) + 8}, 0, options.device(device));
-  torch::Tensor sample_ranges = torch::full({blocks * (long) sizeof(uint2) + 8}, 0, options.device(device));
+    torch::Tensor ranges = torch::full({blocks * (long) sizeof(uint2) + 8}, 0, options.device(device));
+    torch::Tensor sample_ranges = torch::full({blocks * (long) sizeof(uint2) + 8}, 0, options.device(device));
 
-  int rendered = 0;
-  if(P != 0) {
-      rendered = CudaSampler::Sampler::forward(
-        geomFunc,
-        binningFunc,
-        sample_binningFunc,
-        P, D, N, C, blocks,
-        tile_grid.contiguous().data<int>(),
-        min_bound.contiguous().data<float>(),
-        means.contiguous().data<float>(),
-        values.contiguous().data<float>(),
-        covariances.contiguous().data<float>(),
-        conics.contiguous().data<float>(),
-        opacities.contiguous().data<float>(),
-        samples.contiguous().data<float>(),
+    int rendered = 0;
+    if (P != 0) {
+        rendered = CudaSampler::Sampler::preprocess(
+          geom_func,
+          binning_func,
+          sample_binning_func,
+          P, D, N, C, blocks,
+          tile_grid.contiguous().data<int>(),
+          min_bound.contiguous().data<FLOAT>(),
+          means.contiguous().data<FLOAT>(),
+          values.contiguous().data<FLOAT>(),
+          covariances.contiguous().data<FLOAT>(),
+          conics.contiguous().data<FLOAT>(),
+          opacities.contiguous().data<FLOAT>(),
+          samples.contiguous().data<FLOAT>(),
+          reinterpret_cast<uint2*>(ranges.contiguous().data_ptr()),
+          reinterpret_cast<uint2*>(sample_ranges.contiguous().data_ptr()),
+          radii.contiguous().data<FLOAT>(),
+          debug);
+    }
+
+    CudaSampler::Sampler::forward(
+        P, D, N, C, blocks, rendered,
+        means.contiguous().data<FLOAT>(),
+        values.contiguous().data<FLOAT>(),
+        conics.contiguous().data<FLOAT>(),
+        opacities.contiguous().data<FLOAT>(),
+        samples.contiguous().data<FLOAT>(),
+        reinterpret_cast<char*>(binning_buffer.contiguous().data_ptr()),
+        reinterpret_cast<char*>(sample_binning_buffer.contiguous().data_ptr()),
         reinterpret_cast<uint2*>(ranges.contiguous().data_ptr()),
         reinterpret_cast<uint2*>(sample_ranges.contiguous().data_ptr()),
-        out_values.contiguous().data<float>(),
-        radii.contiguous().data<float>(),
+        radii.contiguous().data<FLOAT>(),
+        out_values.contiguous().data<FLOAT>(),
         debug);
-  }
 
-  return std::make_tuple(rendered, out_values, radii, geomBuffer, binningBuffer, sample_binningBuffer, ranges, sample_ranges);
+    return std::make_tuple(rendered, out_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
-	const torch::Tensor& radii,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& covariances,
     const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL,
-	const torch::Tensor& geomBuffer,
-	const torch::Tensor& binningBuffer,
-	const torch::Tensor& sample_binningBuffer,
+	const torch::Tensor& binning_buffer,
+	const torch::Tensor& sample_binning_buffer,
     const torch::Tensor& ranges,
 	const torch::Tensor& sample_ranges,
     const bool debug)
 {
-  const int P = means.size(0);
-  const int D = means.size(-1);
-  const int N = samples.size(0);
-  const int C = values.size(-1);
-  
-  torch::Tensor dL_dmeans = torch::zeros({P, D}, means.options());
-  torch::Tensor dL_dvalues = torch::zeros({P, C}, means.options());
-  torch::Tensor dL_dcovariances = torch::zeros({P, D, D}, means.options());
-  torch::Tensor dL_dconics = torch::zeros({P, D, D}, means.options());
-  torch::Tensor dL_dopacity = torch::zeros({P, 1}, means.options());
-  torch::Tensor dL_dsamples = torch::zeros({P, D}, means.options());
-  
-  if(P != 0) {  
-      CudaSampler::Sampler::backward(P, D, N, C,
-        means.contiguous().data<float>(),
-        values.contiguous().data<float>(),
-        covariances.contiguous().data<float>(),
-        conics.contiguous().data<float>(),
-        opacities.contiguous().data<float>(),
-        samples.contiguous().data<float>(),
-        radii.contiguous().data<float>(),
-        reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
-        reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),
-        reinterpret_cast<char*>(sample_binningBuffer.contiguous().data_ptr()),
-        reinterpret_cast<uint2*>(ranges.contiguous().data_ptr()),
-        reinterpret_cast<uint2*>(sample_ranges.contiguous().data_ptr()),
-        dL.contiguous().data<float>(),
-        dL_dmeans.contiguous().data<float>(),
-        dL_dvalues.contiguous().data<float>(),
-        dL_dcovariances.contiguous().data<float>(),
-        dL_dconics.contiguous().data<float>(),
-        dL_dopacity.contiguous().data<float>(),
-        dL_dsamples.contiguous().data<float>(),
-        debug);
-  }
+    const int P = means.size(0);
+    const int D = means.size(-1);
+    const int N = samples.size(0);
+    const int C = values.size(-1);
 
-  return std::make_tuple(dL_dmeans, dL_dvalues, dL_dcovariances, dL_dconics, dL_dopacity, dL_dsamples);
+    torch::Tensor dL_dmeans = torch::zeros({P, D}, means.options());
+    torch::Tensor dL_dvalues = torch::zeros({P, C}, means.options());
+    torch::Tensor dL_dconics = torch::zeros({P, D, D}, means.options());
+    torch::Tensor dL_dopacities = torch::zeros({P}, means.options());
+    torch::Tensor dL_dsamples = torch::zeros({N, D}, means.options());
+
+    const torch::Tensor min_bound = std::get<0>(samples.min(0));
+    const torch::Tensor max_bound = std::get<0>(samples.max(0));
+
+    const torch::Tensor tile_grid = torch::ceil((max_bound - min_bound + 1e-6f) / BLOCK_SIZE).to(torch::kInt32);
+    const int blocks = torch::prod(tile_grid).item<int>();
+
+    if (P != 0) {
+        CudaSampler::Sampler::backward(
+            P, D, N, C, blocks, num_rendered,
+            means.contiguous().data<FLOAT>(),
+            values.contiguous().data<FLOAT>(),
+            conics.contiguous().data<FLOAT>(),
+            opacities.contiguous().data<FLOAT>(),
+            samples.contiguous().data<FLOAT>(),
+            reinterpret_cast<char*>(binning_buffer.contiguous().data_ptr()),
+            reinterpret_cast<char*>(sample_binning_buffer.contiguous().data_ptr()),
+            reinterpret_cast<uint2*>(ranges.contiguous().data_ptr()),
+            reinterpret_cast<uint2*>(sample_ranges.contiguous().data_ptr()),
+            dL.contiguous().data<FLOAT>(),
+            dL_dmeans.contiguous().data<FLOAT>(),
+            dL_dvalues.contiguous().data<FLOAT>(),
+            dL_dconics.contiguous().data<FLOAT>(),
+            dL_dopacities.contiguous().data<FLOAT>(),
+            dL_dsamples.contiguous().data<FLOAT>(),
+            debug);
+    }
+
+    return std::make_tuple(dL_dmeans, dL_dvalues, dL_dconics, dL_dopacities, dL_dsamples);
 }
-

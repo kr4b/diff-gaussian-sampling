@@ -23,14 +23,14 @@ namespace cg = cooperative_groups;
 // Perform initial steps for each Gaussian prior to rasterization.
 __global__ void preprocessCUDA(
     const int P, const int D, const int N, const int C,
-    const float* means,
-    const float* values,
-    const float* covariances,
-    const float* conics,
-    const float* opacities,
-    float* radii,
+    const FLOAT* means,
+    const FLOAT* values,
+    const FLOAT* covariances,
+    const FLOAT* conics,
+    const FLOAT* opacities,
+    FLOAT* radii,
     const int* grid,
-    const float* grid_offset,
+    const FLOAT* grid_offset,
     uint32_t* tiles_touched)
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -39,11 +39,11 @@ __global__ void preprocessCUDA(
 
 	// Initialize radius and touched tiles to 0. If this isn't changed,
 	// this Gaussian will not be processed further.
-	radii[idx] = 0.0f;
+	radii[idx] = 0.0;
 	tiles_touched[idx] = 0;
 
-    const float* cov = covariances + idx * D * D;
-    float my_radius = 0.0f;
+    const FLOAT* cov = covariances + idx * D * D;
+    FLOAT my_radius = 0.0;
     uint32_t touched = 0;
 
 	// Compute extent in screen space (by finding eigenvalues of
@@ -51,12 +51,12 @@ __global__ void preprocessCUDA(
 	// of screen-space tiles that this Gaussian overlaps with. Quit if
 	// rectangle covers 0 tiles. 
     if (D == 2) {
-        float det = (cov[0] * cov[3] - cov[1] * cov[1]);
-        if (det == 0.0f)
+        FLOAT det = (cov[0] * cov[3] - cov[1] * cov[1]);
+        if (det == 0.0)
             return;
-        float mid = 0.5f * (cov[0] + cov[3]);
-        float lambda1 = mid + sqrt(max(0.1f, mid * mid - det)) / 2.0f;
-        my_radius = 3.0f * sqrt(lambda1);
+        FLOAT mid = 0.5f * (cov[0] + cov[3]);
+        FLOAT lambda1 = mid + sqrt(max(0.1f, mid * mid - det)) / 2.0;
+        my_radius = 3.0 * sqrt(lambda1);
         uint2 rect_min, rect_max;
         getRect(means + idx * D, my_radius, rect_min, rect_max, grid, grid_offset);
         touched = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
@@ -81,12 +81,12 @@ __global__ void renderCUDA(
 	const uint2* __restrict__ sample_ranges,
 	const uint32_t* __restrict__ point_list,
 	const uint32_t* __restrict__ sample_point_list,
-	const float* __restrict__ means,
-	const float* __restrict__ values,
-	const float* __restrict__ conics,
-	const float* __restrict__ opacities,
-    const float* __restrict__ samples,
-	float* __restrict__ out_values)
+	const FLOAT* __restrict__ means,
+	const FLOAT* __restrict__ values,
+	const FLOAT* __restrict__ conics,
+	const FLOAT* __restrict__ opacities,
+    const FLOAT* __restrict__ samples,
+	FLOAT* __restrict__ out_values)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -103,6 +103,8 @@ __global__ void renderCUDA(
 
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[NUM_THREADS];
+
+    FLOAT* X = new float[D];
 
 	// Iterate over batches until range is complete
 	for (int i = 0; i < rounds; i++, toDo -= NUM_THREADS) {
@@ -121,35 +123,34 @@ __global__ void renderCUDA(
 
 		// Iterate over current batch
 		for (int j = 0; j < min(NUM_THREADS, toDo); j++) {
+            const int id = collected_id[j];
+            const FLOAT* mean = means + id * D;
+            const FLOAT* con = conics + id * D * D;
+
             for (int s = 0; s < samples_per_thread; s++) {
                 if (sample_offset + s >= num_samples)
                     break;
 
                 const int sample_id = sample_point_list[sample_range.x + sample_offset + s];
-                const float* sample = samples + sample_id * D;
+                const FLOAT* sample = samples + sample_id * D;
 
-                // Resample using conic matrix (cf. "Surface
-                // Splatting" by Zwicker et al., 2001)
-                float power = 0.0f;
+                for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
+
+                const FLOAT opacity = opacities[id];
+
                 if (D == 2) {
-                    const float* xy = means + collected_id[j] * D;
-                    float X[2];
-                    for (int k = 0; k < D; k++)  X[k] = xy[k] - sample[k];
-                    const float* con = conics + collected_id[j] * D * D;
-                    power = -0.5f * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+                    const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+                    if (power > 0.0) return;
+
+                    const FLOAT alpha = opacity * exp(power);
+                    for (int ch = 0; ch < C; ch++)
+                        out_values[sample_id * C + ch] += values[id * C + ch] * alpha;
                 }
-
-                if (power > 0.0f)
-                    continue;
-
-                const float opacity = opacities[collected_id[j]];
-                const float alpha = opacity * exp(power);
-
-                for (int ch = 0; ch < C; ch++)
-                    out_values[sample_id * C + ch] += values[collected_id[j] * C + ch] * alpha;
             }
         }
     }
+
+    delete X;
 }
 
 void FORWARD::render(
@@ -159,12 +160,12 @@ void FORWARD::render(
     const uint2* sample_ranges,
     const uint32_t* point_list,
     const uint32_t* sample_point_list,
-    const float* mean,
-    const float* value,
-    const float* conic,
-    const float* opacity,
-	const float* samples,
-    float* out_value)
+    const FLOAT* means,
+    const FLOAT* values,
+    const FLOAT* conics,
+    const FLOAT* opacities,
+	const FLOAT* samples,
+    FLOAT* out_value)
 {
 	renderCUDA << <blocks, NUM_THREADS >> > (
         D, C,
@@ -172,25 +173,25 @@ void FORWARD::render(
         sample_ranges,
 		point_list,
 		sample_point_list,
-		mean,
-		value,
-		conic,
-		opacity,
+		means,
+		values,
+		conics,
+		opacities,
         samples,
 		out_value);
 }
 
 void FORWARD::preprocess(
     const int P, const int D, const int N, const int C,
-	const float* means,
-	const float* values,
-    const float* covariances,
-	const float* conics,
-	const float* opacities,
-	float* radii,
-	const int* grid,
-	const float* grid_offset,
-	uint32_t* tiles_touched)
+    const FLOAT* means,
+    const FLOAT* values,
+    const FLOAT* covariances,
+    const FLOAT* conics,
+    const FLOAT* opacities,
+    FLOAT* radii,
+    const int* grid,
+    const FLOAT* grid_offset,
+    uint32_t* tiles_touched)
 {
 	preprocessCUDA << <(P + 255) / 256, 256 >> > (
 		P, D, N, C,

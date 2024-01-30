@@ -18,53 +18,66 @@
 #include <vector>
 #include <functional>
 
-namespace CudaSampler
-{
-    class Sampler
-    {
+#include "config.h"
+
+namespace CudaSampler {
+    class Sampler {
+
     public:
 
-        static int forward(
-            std::function<char* (size_t)> geometryBuffer,
-            std::function<char* (size_t)> binningBuffer,
-            std::function<char* (size_t)> sample_binningBuffer,
+        static int preprocess(
+            std::function<char* (size_t)> geometry_buffer,
+            std::function<char* (size_t)> binning_buffer,
+            std::function<char* (size_t)> sample_binning_buffer,
             const int P, const int D, const int N, const int C,
             const int blocks,
             const int* tile_grid,
-            const float* grid_offset,
-            const float* means,
-            const float* values,
-            const float* covariances,
-            const float* conics,
-            const float* opacities,
-            const float* samples,
+            const FLOAT* grid_offset,
+            const FLOAT* means,
+            const FLOAT* values,
+            const FLOAT* covariances,
+            const FLOAT* conics,
+            const FLOAT* opacities,
+            const FLOAT* samples,
             uint2* ranges,
             uint2* sample_ranges,
-            float* out_values,
-            float* radii = nullptr,
+            FLOAT* radii,
+            bool debug = false);
+
+        static void forward(
+            const int P, const int D, const int N, const int C,
+            const int blocks, const int num_rendered,
+            const FLOAT* means,
+            const FLOAT* values,
+            const FLOAT* conics,
+            const FLOAT* opacities,
+            const FLOAT* samples,
+            char* binning_buffer,
+            char* sample_binning_buffer,
+            const uint2* ranges,
+            const uint2* sample_ranges,
+            const FLOAT* radii,
+            FLOAT* out_values,
             bool debug = false);
 
         static void backward(
             const int P, const int D, const int N, const int C,
-            const float* means,
-            const float* values,
-            const float* covariances,
-            const float* conics,
-            const float* opacities,
-            const float* samples,
-            const float* radii,
-            const char* geomBuffer,
-            const char* binningBuffer,
-            const char* sample_binningBuffer,
+            const int blocks, const int num_rendered,
+            const FLOAT* means,
+            const FLOAT* values,
+            const FLOAT* conics,
+            const FLOAT* opacities,
+            const FLOAT* samples,
+            char* binning_buffer,
+            char* sample_binning_buffer,
             const uint2* ranges,
             const uint2* sample_ranges,
-            const float* dL,
-            float* dL_dmean,
-            float* dL_dvalues,
-            float* dL_dcovariances,
-            float* dL_dconics,
-            float* dL_dopacity,
-            float* dL_dsamples,
+            const FLOAT* dL,
+            FLOAT* dL_dmeans,
+            FLOAT* dL_dvalues,
+            FLOAT* dL_dconics,
+            FLOAT* dL_dopacities,
+            FLOAT* dL_dsamples,
             bool debug);
     };
 };
