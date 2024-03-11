@@ -50,19 +50,30 @@ __global__ void preprocessCUDA(
 	// the covariance matrix). Use extent to compute a bounding rectangle
 	// of screen-space tiles that this Gaussian overlaps with. Quit if
 	// rectangle covers 0 tiles. 
-    if (D == 2) {
+    if (D == 1) {
+        my_radius = 3.0 * sqrt(cov[0]);
+    } else if (D == 2) {
         FLOAT det = (cov[0] * cov[3] - cov[1] * cov[1]);
         if (det == 0.0)
             return;
         FLOAT mid = 0.5f * (cov[0] + cov[3]);
         FLOAT lambda1 = mid + sqrt(max(0.1f, mid * mid - det)) / 2.0;
         my_radius = 3.0 * sqrt(lambda1);
-        uint2 rect_min, rect_max;
-        getRect(means + idx * D, my_radius, rect_min, rect_max, grid, grid_offset);
-        touched = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
-    } else {
-        return;
     }
+
+    uint* rect_min = new uint[D];
+    uint* rect_max = new uint[D];
+
+    getRect(D, means + idx * D, my_radius, rect_min, rect_max, grid, grid_offset);
+
+    if (D == 1) {
+        touched = rect_max[0] - rect_min[0];
+    } else if (D == 2) {
+        touched = (rect_max[1] - rect_min[1]) * (rect_max[0] - rect_min[0]);
+    }
+
+    delete rect_min;
+    delete rect_max;
 
     if (touched == 0)
         return;
@@ -72,9 +83,12 @@ __global__ void preprocessCUDA(
 	tiles_touched[idx] = touched;
 }
 
+typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, FLOAT, int, int, int);
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
+template <gaussian_func F>
 __global__ void renderCUDA(
     const int D, const int C,
 	const uint2* __restrict__ ranges,
@@ -104,7 +118,7 @@ __global__ void renderCUDA(
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[NUM_THREADS];
 
-    FLOAT* X = new float[D];
+    FLOAT* X = new FLOAT[D];
 
 	// Iterate over batches until range is complete
 	for (int i = 0; i < rounds; i++, toDo -= NUM_THREADS) {
@@ -126,6 +140,8 @@ __global__ void renderCUDA(
             const int id = collected_id[j];
             const FLOAT* mean = means + id * D;
             const FLOAT* con = conics + id * D * D;
+            const FLOAT* value = values + id * C;
+            const FLOAT opacity = opacities[id];
 
             for (int s = 0; s < samples_per_thread; s++) {
                 if (sample_offset + s >= num_samples)
@@ -136,16 +152,7 @@ __global__ void renderCUDA(
 
                 for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
 
-                const FLOAT opacity = opacities[id];
-
-                if (D == 2) {
-                    const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
-                    if (power > 0.0) return;
-
-                    const FLOAT alpha = opacity * exp(power);
-                    for (int ch = 0; ch < C; ch++)
-                        out_values[sample_id * C + ch] += values[id * C + ch] * alpha;
-                }
+                F(X, con, value, out_values, opacity, sample_id, D, C);
             }
         }
     }
@@ -153,9 +160,81 @@ __global__ void renderCUDA(
     delete X;
 }
 
+__forceinline__ __device__ void gaussian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+    if (D == 1) {
+        const FLOAT power = -0.5 * con[0] * X[0] * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++)
+            out_values[sample_id * C + ch] += values[ch] * alpha;
+    } else if (D == 2) {
+        const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++)
+            out_values[sample_id * C + ch] += values[ch] * alpha;
+    }
+}
+
+__forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * x1;
+        }
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * (x1 + con[1] * X[1]);
+            out_values[(sample_id * D + 1) * C + ch] += values[ch] * alpha * (x2 + con[1] * X[0]);
+        }
+    }
+}
+
+__forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * (x1 * x1 - con[0]);
+        }
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT a1 = x1 + con[1] * X[1];
+        const FLOAT a2 = x2 + con[1] * X[0];
+
+        const FLOAT alpha = opacity * exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D * D + 0) * C + ch] += values[ch] * alpha * (a1 * a1 - con[0]);
+            out_values[(sample_id * D * D + 1) * C + ch] += values[ch] * alpha * (a1 * a2 - con[1]);
+            out_values[(sample_id * D * D + 2) * C + ch] += values[ch] * alpha * (a1 * a2 - con[1]);
+            out_values[(sample_id * D * D + 3) * C + ch] += values[ch] * alpha * (a2 * a2 - con[3]);
+        }
+    }
+}
+
 void FORWARD::render(
     const int D, const int C,
     const int blocks,
+    const CudaSampler::Function function,
     const uint2* ranges,
     const uint2* sample_ranges,
     const uint32_t* point_list,
@@ -165,20 +244,52 @@ void FORWARD::render(
     const FLOAT* conics,
     const FLOAT* opacities,
 	const FLOAT* samples,
-    FLOAT* out_value)
+    FLOAT* out_values)
 {
-	renderCUDA << <blocks, NUM_THREADS >> > (
-        D, C,
-        ranges,
-        sample_ranges,
-		point_list,
-		sample_point_list,
-		means,
-		values,
-		conics,
-		opacities,
-        samples,
-		out_value);
+    switch (function) {
+        case CudaSampler::Function::gaussian:
+            renderCUDA<gaussian> << <blocks, NUM_THREADS >> > (
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                out_values);
+            break;
+        case CudaSampler::Function::derivative:
+            renderCUDA<gaussian_derivative> << <blocks, NUM_THREADS >> > (
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                out_values);
+            break;
+        case CudaSampler::Function::laplacian:
+            renderCUDA<gaussian_laplacian> << <blocks, NUM_THREADS >> > (
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                out_values);
+            break;
+    }
 }
 
 void FORWARD::preprocess(

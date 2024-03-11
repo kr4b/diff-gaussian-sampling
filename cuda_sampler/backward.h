@@ -22,11 +22,13 @@
 #include <glm/glm.hpp>
 
 #include "config.h"
+#include "sampler.h"
 
 namespace BACKWARD {
     void render(
         const int D, const int C,
         const int blocks,
+        const CudaSampler::Function function,
         const uint2* ranges,
         const uint2* sample_ranges,
         const uint32_t* point_list,

@@ -39,16 +39,12 @@ uint32_t getHigherMsb(uint32_t n)
 {
     uint32_t msb = sizeof(n) * 4;
     uint32_t step = msb;
-    while (step > 1)
-    {
+    while (step > 1) {
         step /= 2;
-        if (n >> msb)
-            msb += step;
-        else
-            msb -= step;
+        if (n >> msb) msb += step;
+        else msb -= step;
     }
-    if (n >> msb)
-        msb++;
+    if (n >> msb) msb++;
     return msb;
 }
 
@@ -69,59 +65,66 @@ __global__ void duplicateWithKeys(
         return;
 
     // Generate no key/value pair for invisible Gaussians
-    if (radii[idx] > 0.0f)
-    {
+    if (radii[idx] > 0.0f) {
         // Find this Gaussian's offset in buffer for writing keys/values.
         uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
-        uint2 rect_min, rect_max;
+        uint* rect_min = new uint[D];
+        uint* rect_max = new uint[D];
 
-        getRect(means + idx * D, radii[idx], rect_min, rect_max, grid, grid_offset);
+        getRect(D, means + idx * D, radii[idx], rect_min, rect_max, grid, grid_offset);
 
         // For each tile that the bounding rect overlaps, emit a
         // key/value pair. The key is |  tile ID  |      idx      |,
         // and the value is the ID of the Gaussian. Sorting the values
         // with this key yields Gaussian IDs in a list, such that they
         // are sorted by tile.
-        for (int y = rect_min.y; y < rect_max.y; y++)
-        {
-            for (int x = rect_min.x; x < rect_max.x; x++)
-            {
-                uint64_t key = y * grid[0] + x;
+        if (D == 1) {
+            for (int x = rect_min[0]; x < rect_max[0]; x++) {
+                uint64_t key = x;
                 key <<= 32;
                 key |= (uint32_t) idx;
                 gaussian_keys_unsorted[off] = key;
                 gaussian_values_unsorted[off] = idx;
                 off++;
             }
+        } else if (D == 2) {
+            for (int y = rect_min[1]; y < rect_max[1]; y++) {
+                for (int x = rect_min[0]; x < rect_max[0]; x++) {
+                    uint64_t key = y * grid[0] + x;
+                    key <<= 32;
+                    key |= (uint32_t) idx;
+                    gaussian_keys_unsorted[off] = key;
+                    gaussian_values_unsorted[off] = idx;
+                    off++;
+                }
+            }
         }
+
+        delete rect_min;
+        delete rect_max;
     }
 }
 
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
-__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
-{
+__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges) {
     auto idx = cg::this_grid().thread_rank();
-    if (idx >= L)
-        return;
+    if (idx >= L) return;
 
     // Read tile ID from key. Update start/end of tile range if at limit.
     uint64_t key = point_list_keys[idx];
     uint32_t currtile = key >> 32;
-    if (idx == 0)
+    if (idx == 0) {
         ranges[currtile].x = 0;
-    else
-    {
+    } else {
         uint32_t prevtile = point_list_keys[idx - 1] >> 32;
-        if (currtile != prevtile)
-        {
+        if (currtile != prevtile) {
             ranges[prevtile].y = idx;
             ranges[currtile].x = idx;
         }
     }
-    if (idx == L - 1)
-        ranges[currtile].y = L;
+    if (idx == L - 1) ranges[currtile].y = L;
 }
 
 // Generates one key/value pair for all sample / tile overlaps.
@@ -138,18 +141,28 @@ __global__ void sampleWithKeys(
     if (idx >= N)
         return;
 
-    const uint2 tile = getTile(means + idx * D, grid, grid_offset);
+    uint* tile = new uint[D];
+	for (size_t i = 0; i < D; i++) {
+		tile[i] = (uint)min(grid[i], max((int)0, (int)((means[idx * D + i] - grid_offset[i]) / BLOCK_SIZE)));
+	}
 
     // For the tile that the sample resides in, emit a key/value pair.
     // The key is |  tile ID  |      idx      |,
     // and the value is the ID of the sample. Sorting the values
     // with this key yields sample IDs in a list, such that they
     // are sorted by tile.
-    uint64_t key = tile.y * grid[0] + tile.x;
+    uint64_t key;
+    if (D == 1) {
+        key = tile[0];
+    } else if (D == 2) {
+        key = tile[1] * grid[0] + tile[0];
+    }
     key <<= 32;
     key |= (uint32_t) idx;
     sample_keys_unsorted[idx] = key;
     sample_values_unsorted[idx] = idx;
+
+    delete tile;
 }
 
 CudaSampler::GeometryState CudaSampler::GeometryState::fromChunk(char*& chunk, size_t P) {
@@ -253,7 +266,7 @@ int CudaSampler::Sampler::preprocess(
         identifyTileRanges << <(num_rendered + 255) / 256, 256 >> > (
             num_rendered,
             binning_state.point_list_keys,
-            ranges);
+            ranges)
         CHECK_CUDA(, debug)
     }
 
@@ -272,6 +285,12 @@ int CudaSampler::Sampler::preprocess(
         grid_offset)
     CHECK_CUDA(, debug)
 
+    // uint64_t* keys = new uint64_t[N];
+    // cudaMemcpy(keys, sample_binning_state.point_list_keys_unsorted, N, cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < N; i++) {
+    //     std::cout << (keys[i] >> 32) << std::endl;
+    // }
+
     // Sort complete list of samples indices by keys
     CHECK_CUDA(cub::DeviceRadixSort::SortPairs(
         sample_binning_state.list_sorting_space,
@@ -283,8 +302,7 @@ int CudaSampler::Sampler::preprocess(
     identifyTileRanges << <(N + 255) / 256, 256 >> > (
         N,
         sample_binning_state.point_list_keys,
-        sample_ranges
-    );
+        sample_ranges)
     CHECK_CUDA(, debug)
 
     return num_rendered;
@@ -294,6 +312,7 @@ int CudaSampler::Sampler::preprocess(
 void CudaSampler::Sampler::forward(
     const int P, const int D, const int N, const int C,
     const int blocks, const int num_rendered,
+    const CudaSampler::Function function,
     const FLOAT* means,
     const FLOAT* values,
     const FLOAT* conics,
@@ -303,7 +322,6 @@ void CudaSampler::Sampler::forward(
     char* sample_binning_buffer,
     const uint2* ranges,
     const uint2* sample_ranges,
-    const FLOAT* radii,
     FLOAT* out_values,
     bool debug)
 {
@@ -312,8 +330,8 @@ void CudaSampler::Sampler::forward(
 
     // Let each tile blend its range of Gaussians independently in parallel
     CHECK_CUDA(FORWARD::render(
-        D, C,
-        blocks,
+        D, C, blocks,
+        function,
         ranges,
         sample_ranges,
         binning_state.point_list,
@@ -331,6 +349,7 @@ void CudaSampler::Sampler::forward(
 void CudaSampler::Sampler::backward(
     const int P, const int D, const int N, const int C,
     const int blocks, const int num_rendered,
+    const CudaSampler::Function function,
     const FLOAT* means,
     const FLOAT* values,
     const FLOAT* conics,
@@ -353,8 +372,8 @@ void CudaSampler::Sampler::backward(
 
     // Compute loss gradients w.r.t. means, values, conics, opacities and samples.
     CHECK_CUDA(BACKWARD::render(
-        D, C,
-        blocks,
+        D, C, blocks,
+        function,
         ranges,
         sample_ranges,
         binning_state.point_list,

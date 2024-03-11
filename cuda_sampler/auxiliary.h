@@ -18,22 +18,11 @@
 #include "config.h"
 #include "stdio.h"
 
-__forceinline__ __device__ void getRect(const FLOAT* p, FLOAT max_radius, uint2& rect_min, uint2& rect_max, const int* grid, const FLOAT* grid_offset) {
-	rect_min = {
-		(uint)min(grid[0], max((int)0, (int)((p[0] - grid_offset[0] - max_radius) / BLOCK_SIZE))),
-		(uint)min(grid[1], max((int)0, (int)((p[1] - grid_offset[1] - max_radius) / BLOCK_SIZE)))
-	};
-	rect_max = {
-		(uint)min(grid[0], max((int)0, (int)ceil((p[0] - grid_offset[0] + max_radius) / BLOCK_SIZE))),
-		(uint)min(grid[1], max((int)0, (int)ceil((p[1] - grid_offset[1] + max_radius) / BLOCK_SIZE)))
-	};
-}
-
-__forceinline__ __device__ uint2 getTile(const FLOAT* p, const int* grid, const FLOAT* grid_offset) {
-	return {
-		(uint)min(grid[0], max((int)0, (int)((p[0] - grid_offset[0]) / BLOCK_SIZE))),
-		(uint)min(grid[1], max((int)0, (int)((p[1] - grid_offset[1]) / BLOCK_SIZE)))
-	};
+__forceinline__ __device__ void getRect(int D, const FLOAT* p, FLOAT max_radius, uint* rect_min, uint* rect_max, const int* grid, const FLOAT* grid_offset) {
+	for (size_t i = 0; i < D; i++) {
+		rect_min[i] = (uint)min(grid[i], max((int)0, (int)((p[i] - grid_offset[i] - max_radius) / BLOCK_SIZE)));
+		rect_max[i] = (uint)min(grid[i], max((int)0, (int)ceil((p[i] - grid_offset[i] + max_radius) / BLOCK_SIZE)));
+	}
 }
 
 #define CHECK_CUDA(A, debug) \

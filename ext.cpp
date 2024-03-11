@@ -16,10 +16,11 @@
 #include "sample_points.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("preprocess_gaussians", &PreprocessCUDA);
   m.def("sample_gaussians", &SampleGaussiansCUDA);
   m.def("sample_gaussians_backward", &SampleGaussiansBackwardCUDA);
-  // m.def("sample_gaussians_derivatives", &SampleGaussiansCUDA);
-  // m.def("sample_gaussians_derivatives_backward", &SampleGaussiansBackwardCUDA);
-  // m.def("sample_gaussians_derivatives2", &SampleGaussiansCUDA);
-  // m.def("sample_gaussians_derivatives2_backward", &SampleGaussiansBackwardCUDA);
+  m.def("sample_gaussians_derivative", &SampleGaussiansDerivativeCUDA);
+  m.def("sample_gaussians_derivative_backward", &SampleGaussiansDerivativeBackwardCUDA);
+  m.def("sample_gaussians_laplacian", &SampleGaussiansLaplacianCUDA);
+  m.def("sample_gaussians_laplacian_backward", &SampleGaussiansLaplacianBackwardCUDA);
 }

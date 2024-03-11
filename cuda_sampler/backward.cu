@@ -20,7 +20,10 @@ namespace cg = cooperative_groups;
 
 #define NUM_THREADS 256
 
+typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, FLOAT*, FLOAT*, FLOAT*, FLOAT*, FLOAT, int, int, int);
+
 // Backward version of the rendering procedure.
+template <gaussian_func F>
 __global__ void renderCUDA(
     const int D, const int C,
 	const uint2* __restrict__ ranges,
@@ -75,6 +78,8 @@ __global__ void renderCUDA(
             const int id = collected_id[j];
             const FLOAT* mean = means + id * D;
             const FLOAT* con = conics + id * D * D;
+            const FLOAT* value = values + id * C;
+            const FLOAT opacity = opacities[id];
 
             for (int s = 0; s < samples_per_thread; s++) {
                 if (sample_offset + s >= num_samples)
@@ -83,46 +88,9 @@ __global__ void renderCUDA(
                 const int sample_id = sample_point_list[sample_range.x + sample_offset + s];
                 const FLOAT* sample = samples + sample_id * D;
 
-                // Resample as before
-                FLOAT power = 0.0;
-                if (D == 2) {
-                    for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
-                    power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
-                }
+                for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
 
-                if (power > 0.0)
-                    continue;
-
-                const FLOAT G = exp(power);
-                const FLOAT opacity = opacities[id];
-
-                FLOAT dL_dG = 0.0;
-                for (int ch = 0; ch < C; ch++) {
-                    const FLOAT dL_dchannel = dL_dout_values[sample_id * C + ch];
-                    atomicAdd(&(dL_dvalues[id * C + ch]), G * opacity * dL_dchannel);
-                    dL_dG += values[id * C + ch] * dL_dchannel;
-                }
-
-                if (D == 2) {
-                    // Helpful reusable temporary variables
-                    const FLOAT gdx = opacity * G * X[0];
-                    const FLOAT gdy = opacity * G * X[1];
-                    const FLOAT dG_ddelx = gdx * con[0] + gdy * con[1];
-                    const FLOAT dG_ddely = gdx * con[1] + gdy * con[3];
-
-                    atomicAdd(&(dL_dmeans[id * D + 0]), -dL_dG * dG_ddelx);
-                    atomicAdd(&(dL_dmeans[id * D + 1]), -dL_dG * dG_ddely);
-
-                    atomicAdd(&(dL_dsamples[sample_id * D + 0]), dL_dG * dG_ddelx);
-                    atomicAdd(&(dL_dsamples[sample_id * D + 1]), dL_dG * dG_ddely);
-
-                    atomicAdd(&(dL_dconics[id * D * D + 0]), -0.5 * gdx * X[0] * dL_dG);
-                    atomicAdd(&(dL_dconics[id * D * D + 1]), -0.5 * gdy * X[0] * dL_dG);
-                    atomicAdd(&(dL_dconics[id * D * D + 2]), -0.5 * gdx * X[1] * dL_dG);
-                    atomicAdd(&(dL_dconics[id * D * D + 3]), -0.5 * gdy * X[1] * dL_dG);
-
-                    atomicAdd(&(dL_dopacities[id]), G * dL_dG);
-                }
+                F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * D, dL_dopacities + id, dL_dsamples, opacity, sample_id, D, C);
             }
         }
     }
@@ -130,9 +98,234 @@ __global__ void renderCUDA(
     delete X;
 }
 
+__forceinline__ __device__ void gaussian(
+    const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dopacities, FLOAT* dL_dsamples,
+    FLOAT opacity, int sample_id, int D, int C)
+{
+    if (D == 1) {
+        FLOAT power = -0.5 * con[0] * X[0] * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+
+        FLOAT dL_dG = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannel = dL_dout_values[sample_id * C + ch];
+            atomicAdd(dL_dvalues + ch, G * opacity * dL_dchannel);
+            dL_dG += values[ch] * dL_dchannel;
+        }
+
+        const FLOAT gdx = opacity * G * X[0];
+        const FLOAT dG_ddelx = gdx * con[0];
+        const FLOAT dL_dx = dL_dG * dG_ddelx;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
+        atomicAdd(dL_dopacities, G * dL_dG);
+    } else if (D == 2) {
+        FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+
+        FLOAT dL_dG = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannel = dL_dout_values[sample_id * C + ch];
+            atomicAdd(dL_dvalues + ch, G * opacity * dL_dchannel);
+            dL_dG += values[ch] * dL_dchannel;
+        }
+
+        const FLOAT gdx = opacity * G * X[0];
+        const FLOAT gdy = opacity * G * X[1];
+        const FLOAT dG_ddelx = gdx * con[0] + gdy * con[1];
+        const FLOAT dG_ddely = gdx * con[1] + gdy * con[3];
+        const FLOAT dL_dx = dL_dG * dG_ddelx;
+        const FLOAT dL_dy = dL_dG * dG_ddely;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dmeans + 1, -dL_dy);
+
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
+
+        atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
+        atomicAdd(dL_dconics + 1, -0.5 * gdy * X[0] * dL_dG);
+        atomicAdd(dL_dconics + 2, -0.5 * gdx * X[1] * dL_dG);
+        atomicAdd(dL_dconics + 3, -0.5 * gdy * X[1] * dL_dG);
+
+        atomicAdd(dL_dopacities, G * dL_dG);
+    }
+}
+
+__forceinline__ __device__ void gaussian_derivative(
+    const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dopacities, FLOAT* dL_dsamples,
+    FLOAT opacity, int sample_id, int D, int C)
+{
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+
+        FLOAT dL_dG = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannel = dL_dout_values[(sample_id * D + 0) * C + ch];
+            const FLOAT gx = x1 * dL_dchannel;
+            atomicAdd(dL_dvalues + ch, gx * G * opacity);
+            dL_dG += values[ch] * dL_dchannel;
+        }
+
+        const FLOAT gx = x1 * dL_dG;
+        const FLOAT dL_dx = (x1 * x1 - con[0]) * dL_dG * opacity * G;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dconics + 0, (X[0] * dL_dG - 0.5 * X[0] * X[0] * gx) * opacity * G);
+        atomicAdd(dL_dopacities, gx * G);
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+        const FLOAT a1 = x1 + con[1] * X[1];
+        const FLOAT a2 = x2 + con[1] * X[0];
+
+        FLOAT dL_dGx = 0.0;
+        FLOAT dL_dGy = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannelx = dL_dout_values[(sample_id * D + 0) * C + ch];
+            const FLOAT dL_dchannely = dL_dout_values[(sample_id * D + 1) * C + ch];
+            const FLOAT gx = a1 * dL_dchannelx + a2 * dL_dchannely;
+            atomicAdd(dL_dvalues + ch, gx * G * opacity);
+            dL_dGx += values[ch] * dL_dchannelx;
+            dL_dGy += values[ch] * dL_dchannely;
+        }
+
+        const FLOAT gx = (a1 * dL_dGx + a2 * dL_dGy);
+        const FLOAT dL_dx = ((a1 * a1 - con[0]) * dL_dGx + (a1 * a2 - con[1]) * dL_dGy) * opacity * G;
+        const FLOAT dL_dy = ((a2 * a2 - con[3]) * dL_dGy + (a1 * a2 - con[1]) * dL_dGx) * opacity * G;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dmeans + 1, -dL_dy);
+
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
+
+        atomicAdd(dL_dconics + 0, (X[0] * dL_dGx - 0.5 * X[0] * X[0] * gx) * opacity * G);
+        atomicAdd(dL_dconics + 1, 0.5 * (X[1] * dL_dGx + X[0] * dL_dGy - X[0] * X[1] * gx) * opacity * G);
+        atomicAdd(dL_dconics + 2, 0.5 * (X[0] * dL_dGy + X[1] * dL_dGx - X[1] * X[0] * gx) * opacity * G);
+        atomicAdd(dL_dconics + 3, (X[1] * dL_dGy - 0.5 * X[1] * X[1] * gx) * opacity * G);
+
+        atomicAdd(dL_dopacities, gx * G);
+    }
+}
+
+__forceinline__ __device__ void gaussian_laplacian(
+    const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dopacities, FLOAT* dL_dsamples,
+    FLOAT opacity, int sample_id, int D, int C)
+{
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+
+        FLOAT dL_dG = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannel = dL_dout_values[(sample_id * D * D + 0) * C + ch];
+            const FLOAT gx = (x1 * x1 - con[0]) * dL_dchannel;
+            atomicAdd(dL_dvalues + ch, gx * G * opacity);
+            dL_dG += values[ch] * dL_dchannel;
+        }
+
+        const FLOAT gx = (x1 * x1 - con[0]) * dL_dG;
+        const FLOAT dL_dx = (x1 * x1 * x1 - 3.0 * con[0] * x1) * dL_dG;
+        const FLOAT dV_dc = -0.5 * (x1 * x1 - con[0]) * X[0] * X[0] + 2.0 * x1 * X[0] - 1.0;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dconics + 0, dV_dc * dL_dG * opacity * G);
+        atomicAdd(dL_dopacities, gx * G);
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+        const FLOAT a1 = x1 + con[1] * X[1];
+        const FLOAT a2 = x2 + con[1] * X[0];
+
+        FLOAT dL_dGxx = 0.0;
+        FLOAT dL_dGxy = 0.0;
+        FLOAT dL_dGyx = 0.0;
+        FLOAT dL_dGyy = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannelxx = dL_dout_values[(sample_id * D * D + 0) * C + ch];
+            const FLOAT dL_dchannelxy = dL_dout_values[(sample_id * D * D + 1) * C + ch];
+            const FLOAT dL_dchannelyx = dL_dout_values[(sample_id * D * D + 2) * C + ch];
+            const FLOAT dL_dchannelyy = dL_dout_values[(sample_id * D * D + 3) * C + ch];
+            const FLOAT gxx = (a1 * a1 - con[0]) * dL_dchannelxx
+                            + (a1 * a2 - con[1]) * dL_dchannelxy
+                            + (a2 * a1 - con[1]) * dL_dchannelyx
+                            + (a2 * a2 - con[3]) * dL_dchannelyy;
+            atomicAdd(dL_dvalues + ch, gxx * G * opacity);
+            dL_dGxx += values[ch] * dL_dchannelxx;
+            dL_dGxy += values[ch] * dL_dchannelxy;
+            dL_dGyx += values[ch] * dL_dchannelyx;
+            dL_dGyy += values[ch] * dL_dchannelyy;
+        }
+
+        const FLOAT gxx = (a1 * a1 - con[0]) * dL_dGxx
+                        + (a1 * a2 - con[1]) * dL_dGxy
+                        + (a2 * a1 - con[1]) * dL_dGyx
+                        + (a2 * a2 - con[3]) * dL_dGyy;
+        const FLOAT dL_dx = ((a1 * a1 * a1 - 3.0 * con[0] * a1) * dL_dGxx
+                          +  (a1 * a2 * a1 - con[1] * a1 - (con[1] * a1 + con[0] * a2)) * (dL_dGxy + dL_dGyx)
+                          +  (a2 * a2 * a1 - con[3] * a1 - 2.0 * con[1] * a2) * dL_dGyy) * opacity * G;
+        const FLOAT dL_dy = ((a1 * a1 * a2 - con[0] * a2 - 2.0 * con[1] * a1) * dL_dGxx
+                          +  (a1 * a2 * a2 - con[1] * a2 - (con[3] * a1 + con[1] * a2)) * (dL_dGxy + dL_dGyx)
+                          +  (a2 * a2 * a2 - 3.0 * con[3] * a2) * dL_dGyy) * opacity * G;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dmeans + 1, -dL_dy);
+
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
+
+        const FLOAT dVxx_dcxx = -0.5 * (a1 * a1 - con[0]) * X[0] * X[0] + 2.0 * a1 * X[0] - 1.0;
+        const FLOAT dVxy_dcxx = -0.5 * (a1 * a2 - con[1]) * X[0] * X[0] + a2 * X[0];
+        const FLOAT dVyy_dcxx = -0.5 * (a2 * a2 - con[3]) * X[0] * X[0];
+
+        const FLOAT dVxx_dcxy = -0.5 * (a1 * a1 - con[0]) * X[0] * X[1] + a1 * X[1];
+        const FLOAT dVxy_dcxy = -(a1 * a2 - con[1]) * X[0] * X[1] + a2 * X[1] + a1 * X[0] - 1.0;
+        const FLOAT dVyy_dcxy = -0.5 * (a2 * a2 - con[3]) * X[0] * X[1] + a2 * X[0];
+
+        const FLOAT dVxx_dcyy = -0.5 * (a1 * a1 - con[0]) * X[1] * X[1];
+        const FLOAT dVxy_dcyy = -0.5 * (a1 * a2 - con[1]) * X[1] * X[1] + a1 * X[1];
+        const FLOAT dVyy_dcyy = -0.5 * (a2 * a2 - con[3]) * X[1] * X[1] + 2.0 * a2 * X[1] - 1.0;
+
+        atomicAdd(dL_dconics + 0, (dVxx_dcxx * dL_dGxx + dVxy_dcxx * (dL_dGxy + dL_dGyx) + dVyy_dcxx * dL_dGyy) * opacity * G);
+        atomicAdd(dL_dconics + 1, (dVxx_dcxy * dL_dGxx + 0.5 * dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * opacity * G);
+        atomicAdd(dL_dconics + 2, (dVxx_dcxy * dL_dGxx + 0.5 * dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * opacity * G);
+        atomicAdd(dL_dconics + 3, (dVxx_dcyy * dL_dGxx + dVxy_dcyy * (dL_dGxy + dL_dGyx) + dVyy_dcyy * dL_dGyy) * opacity * G);
+
+        atomicAdd(dL_dopacities, gxx * G);
+    }
+}
+
 void BACKWARD::render(
     const int D, const int C,
     const int blocks,
+    const CudaSampler::Function function,
     const uint2* ranges,
     const uint2* sample_ranges,
     const uint32_t* point_list,
@@ -149,21 +342,63 @@ void BACKWARD::render(
     FLOAT* dL_dopacities,
     FLOAT* dL_dsamples)
 {
-	renderCUDA << <blocks, NUM_THREADS >> >(
-		D, C,
-        ranges,
-        sample_ranges,
-		point_list,
-		sample_point_list,
-		means,
-        values,
-		conics,
-        opacities,
-		samples,
-		dL_dout_values,
-		dL_dmeans,
-		dL_dvalues,
-		dL_dconics,
-		dL_dopacities,
-        dL_dsamples);
+    switch (function) {
+        case CudaSampler::Function::gaussian:
+            renderCUDA<gaussian> << <blocks, NUM_THREADS >> >(
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                dL_dout_values,
+                dL_dmeans,
+                dL_dvalues,
+                dL_dconics,
+                dL_dopacities,
+                dL_dsamples);
+            break;
+        case CudaSampler::Function::derivative:
+            renderCUDA<gaussian_derivative> << <blocks, NUM_THREADS >> >(
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                dL_dout_values,
+                dL_dmeans,
+                dL_dvalues,
+                dL_dconics,
+                dL_dopacities,
+                dL_dsamples);
+            break;
+        case CudaSampler::Function::laplacian:
+            renderCUDA<gaussian_laplacian> << <blocks, NUM_THREADS >> >(
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                opacities,
+                samples,
+                dL_dout_values,
+                dL_dmeans,
+                dL_dvalues,
+                dL_dconics,
+                dL_dopacities,
+                dL_dsamples);
+            break;
+    }
 }

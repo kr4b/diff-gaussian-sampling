@@ -22,6 +22,7 @@
 #include <glm/glm.hpp>
 
 #include "config.h"
+#include "sampler.h"
 
 namespace FORWARD {
 	// Perform initial steps for each Gaussian prior to rasterization.
@@ -41,6 +42,7 @@ namespace FORWARD {
 	void render(
 		const int D, const int C,
 		const int blocks,
+		const CudaSampler::Function function,
 		const uint2* ranges,
 		const uint2* sample_ranges,
 		const uint32_t* point_list,
@@ -50,7 +52,7 @@ namespace FORWARD {
 		const FLOAT* conics,
 		const FLOAT* opacities,
 		const FLOAT* samples,
-		FLOAT* out_value);
+		FLOAT* out_values);
 }
 
 

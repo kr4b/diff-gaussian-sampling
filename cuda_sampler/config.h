@@ -15,7 +15,7 @@
 #ifndef CUDA_SAMPLER_CONFIG_H_INCLUDED
 #define CUDA_SAMPLER_CONFIG_H_INCLUDED
 
-#define BLOCK_SIZE 1.0f
+#define BLOCK_SIZE 0.5f
 typedef float FLOAT;
 
 #endif

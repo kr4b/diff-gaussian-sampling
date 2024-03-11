@@ -21,6 +21,8 @@
 #include "config.h"
 
 namespace CudaSampler {
+    enum Function { gaussian, derivative, laplacian };
+
     class Sampler {
 
     public:
@@ -47,6 +49,7 @@ namespace CudaSampler {
         static void forward(
             const int P, const int D, const int N, const int C,
             const int blocks, const int num_rendered,
+            const Function function,
             const FLOAT* means,
             const FLOAT* values,
             const FLOAT* conics,
@@ -56,13 +59,13 @@ namespace CudaSampler {
             char* sample_binning_buffer,
             const uint2* ranges,
             const uint2* sample_ranges,
-            const FLOAT* radii,
             FLOAT* out_values,
             bool debug = false);
 
         static void backward(
             const int P, const int D, const int N, const int C,
             const int blocks, const int num_rendered,
+            const Function function,
             const FLOAT* means,
             const FLOAT* values,
             const FLOAT* conics,
@@ -72,7 +75,7 @@ namespace CudaSampler {
             char* sample_binning_buffer,
             const uint2* ranges,
             const uint2* sample_ranges,
-            const FLOAT* dL,
+            const FLOAT* dL_dout_values,
             FLOAT* dL_dmeans,
             FLOAT* dL_dvalues,
             FLOAT* dL_dconics,
