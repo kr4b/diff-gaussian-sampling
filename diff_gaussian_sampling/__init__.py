@@ -46,7 +46,6 @@ def preprocess_gaussians(
     values,
     covariances,
     conics,
-    opacities,
     samples,
     debug,
 ):
@@ -56,7 +55,6 @@ def preprocess_gaussians(
         values,
         covariances,
         conics,
-        opacities,
         samples,
         debug
     )
@@ -67,28 +65,27 @@ def preprocess_gaussians(
 
 def call_forward(ctx, func, name, *args):
     # Restructure arguments the way that the C++ lib expects them
-    means, values, conics, opacities, samples, num_rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges, debug = args
+    means, values, conics, samples, num_rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges, debug = args
 
     out_values = call_debug(func, debug, name, *args)
 
     # Keep relevant tensors for backward
     ctx.debug = debug
     ctx.num_rendered = num_rendered
-    ctx.save_for_backward(means, values, conics, opacities, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges)
+    ctx.save_for_backward(means, values, conics, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges)
     return out_values
 
 def call_backward(ctx, func, grad_out, name):
     # Restore necessary values from context
     num_rendered = ctx.num_rendered
     debug = ctx.debug
-    means, values, conics, opacities, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges = ctx.saved_tensors
+    means, values, conics, samples, binning_buffer, sample_binning_buffer, ranges, sample_ranges = ctx.saved_tensors
 
     # Restructure args as C++ method expects them
     args = (
         means,
         values,
         conics,
-        opacities,
         samples,
         num_rendered,
         grad_out,
@@ -99,13 +96,12 @@ def call_backward(ctx, func, grad_out, name):
         debug
     )
 
-    grad_means, grad_values, grad_conics, grad_opacities, grad_samples = call_debug(func, debug, name, *args)
+    grad_means, grad_values, grad_conics, grad_samples = call_debug(func, debug, name, *args)
 
     grads = (
         grad_means,
         grad_values,
         grad_conics,
-        grad_opacities,
         grad_samples,
         None,
         None,
@@ -148,16 +144,15 @@ class GaussianSampler:
     def __init__(self, debug):
         self.debug = debug
 
-    def preprocess(self, means, values, covariances, conics, opacities, samples):
+    def preprocess(self, means, values, covariances, conics, samples):
         debug = self.debug
 
         num_rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges = \
-            preprocess_gaussians(means, values, covariances, conics, opacities, samples, debug)
+            preprocess_gaussians(means, values, covariances, conics, samples, debug)
 
         self.means = means
         self.values = values
         self.conics = conics
-        self.opacities = opacities
         self.samples = samples
         self.num_rendered = num_rendered
         self.binning_buffer = binning_buffer
@@ -170,7 +165,6 @@ class GaussianSampler:
             self.means,
             self.values,
             self.conics,
-            self.opacities,
             self.samples,
             self.num_rendered,
             self.binning_buffer,
@@ -185,7 +179,6 @@ class GaussianSampler:
             self.means,
             self.values,
             self.conics,
-            self.opacities,
             self.samples,
             self.num_rendered,
             self.binning_buffer,
@@ -200,7 +193,6 @@ class GaussianSampler:
             self.means,
             self.values,
             self.conics,
-            self.opacities,
             self.samples,
             self.num_rendered,
             self.binning_buffer,

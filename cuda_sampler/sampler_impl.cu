@@ -202,7 +202,6 @@ int CudaSampler::Sampler::preprocess(
 	const FLOAT* values,
     const FLOAT* covariances,
     const FLOAT* conics,
-    const FLOAT* opacities,
     const FLOAT* samples,
     uint2* ranges,
     uint2* sample_ranges,
@@ -220,7 +219,6 @@ int CudaSampler::Sampler::preprocess(
         values,
         covariances,
         conics,
-        opacities,
         radii,
         tile_grid,
         grid_offset,
@@ -316,7 +314,6 @@ void CudaSampler::Sampler::forward(
     const FLOAT* means,
     const FLOAT* values,
     const FLOAT* conics,
-    const FLOAT* opacities,
     const FLOAT* samples,
     char* binning_buffer,
     char* sample_binning_buffer,
@@ -339,7 +336,6 @@ void CudaSampler::Sampler::forward(
         means,
         values,
         conics,
-        opacities,
         samples,
         out_values), debug)
 }
@@ -353,7 +349,6 @@ void CudaSampler::Sampler::backward(
     const FLOAT* means,
     const FLOAT* values,
     const FLOAT* conics,
-    const FLOAT* opacities,
     const FLOAT* samples,
     char* binning_buffer,
     char* sample_binning_buffer,
@@ -363,14 +358,13 @@ void CudaSampler::Sampler::backward(
     FLOAT* dL_dmeans,
     FLOAT* dL_dvalues,
     FLOAT* dL_dconics,
-    FLOAT* dL_dopacities,
     FLOAT* dL_dsamples,
     bool debug)
 {
     BinningState binning_state = BinningState::fromChunk(binning_buffer, num_rendered);
     BinningState sample_binning_state = BinningState::fromChunk(sample_binning_buffer, N);
 
-    // Compute loss gradients w.r.t. means, values, conics, opacities and samples.
+    // Compute loss gradients w.r.t. means, values, conics and samples.
     CHECK_CUDA(BACKWARD::render(
         D, C, blocks,
         function,
@@ -381,13 +375,11 @@ void CudaSampler::Sampler::backward(
         means,
         values,
         conics,
-        opacities,
         samples,
         dL_dout_values,
         dL_dmeans,
         dL_dvalues,
         dL_dconics,
-        dL_dopacities,
         dL_dsamples), debug)
 }
 

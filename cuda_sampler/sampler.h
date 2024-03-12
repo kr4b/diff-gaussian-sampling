@@ -39,7 +39,6 @@ namespace CudaSampler {
             const FLOAT* values,
             const FLOAT* covariances,
             const FLOAT* conics,
-            const FLOAT* opacities,
             const FLOAT* samples,
             uint2* ranges,
             uint2* sample_ranges,
@@ -53,7 +52,6 @@ namespace CudaSampler {
             const FLOAT* means,
             const FLOAT* values,
             const FLOAT* conics,
-            const FLOAT* opacities,
             const FLOAT* samples,
             char* binning_buffer,
             char* sample_binning_buffer,
@@ -69,7 +67,6 @@ namespace CudaSampler {
             const FLOAT* means,
             const FLOAT* values,
             const FLOAT* conics,
-            const FLOAT* opacities,
             const FLOAT* samples,
             char* binning_buffer,
             char* sample_binning_buffer,
@@ -79,7 +76,6 @@ namespace CudaSampler {
             FLOAT* dL_dmeans,
             FLOAT* dL_dvalues,
             FLOAT* dL_dconics,
-            FLOAT* dL_dopacities,
             FLOAT* dL_dsamples,
             bool debug);
     };

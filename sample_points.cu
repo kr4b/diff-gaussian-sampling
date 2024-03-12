@@ -40,7 +40,6 @@ PreprocessCUDA(
     const torch::Tensor& values,
     const torch::Tensor& covariances,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const bool debug)
 {
@@ -88,7 +87,6 @@ PreprocessCUDA(
             values.contiguous().data<FLOAT>(),
             covariances.contiguous().data<FLOAT>(),
             conics.contiguous().data<FLOAT>(),
-            opacities.contiguous().data<FLOAT>(),
             samples.contiguous().data<FLOAT>(),
             reinterpret_cast<uint2*>(ranges.contiguous().data_ptr()),
             reinterpret_cast<uint2*>(sample_ranges.contiguous().data_ptr()),
@@ -103,7 +101,6 @@ torch::Tensor SampleGaussiansCUDAGeneric(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
 	const torch::Tensor& binning_buffer,
@@ -133,7 +130,6 @@ torch::Tensor SampleGaussiansCUDAGeneric(
             means.contiguous().data<FLOAT>(),
             values.contiguous().data<FLOAT>(),
             conics.contiguous().data<FLOAT>(),
-            opacities.contiguous().data<FLOAT>(),
             samples.contiguous().data<FLOAT>(),
             reinterpret_cast<char*>(binning_buffer.contiguous().data_ptr()),
             reinterpret_cast<char*>(sample_binning_buffer.contiguous().data_ptr()),
@@ -146,12 +142,11 @@ torch::Tensor SampleGaussiansCUDAGeneric(
     return out_values;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDAGeneric(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL_dout_values,
@@ -170,7 +165,6 @@ SampleGaussiansBackwardCUDAGeneric(
     torch::Tensor dL_dmeans = torch::zeros({P, D}, means.options());
     torch::Tensor dL_dvalues = torch::zeros({P, C}, means.options());
     torch::Tensor dL_dconics = torch::zeros({P, D, D}, means.options());
-    torch::Tensor dL_dopacities = torch::zeros({P}, means.options());
     torch::Tensor dL_dsamples = torch::zeros({N, D}, means.options());
 
     if (P != 0 && N != 0) {
@@ -187,7 +181,6 @@ SampleGaussiansBackwardCUDAGeneric(
             means.contiguous().data<FLOAT>(),
             values.contiguous().data<FLOAT>(),
             conics.contiguous().data<FLOAT>(),
-            opacities.contiguous().data<FLOAT>(),
             samples.contiguous().data<FLOAT>(),
             reinterpret_cast<char*>(binning_buffer.contiguous().data_ptr()),
             reinterpret_cast<char*>(sample_binning_buffer.contiguous().data_ptr()),
@@ -197,19 +190,17 @@ SampleGaussiansBackwardCUDAGeneric(
             dL_dmeans.contiguous().data<FLOAT>(),
             dL_dvalues.contiguous().data<FLOAT>(),
             dL_dconics.contiguous().data<FLOAT>(),
-            dL_dopacities.contiguous().data<FLOAT>(),
             dL_dsamples.contiguous().data<FLOAT>(),
             debug);
     }
 
-    return std::make_tuple(dL_dmeans, dL_dvalues, dL_dconics, dL_dopacities, dL_dsamples);
+    return std::make_tuple(dL_dmeans, dL_dvalues, dL_dconics, dL_dsamples);
 }
 
 torch::Tensor SampleGaussiansCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
 	const torch::Tensor& binning_buffer,
@@ -226,7 +217,7 @@ torch::Tensor SampleGaussiansCUDA(
     torch::Tensor out_values = torch::full({N, C}, 0.0, float_opts);
 
     return SampleGaussiansCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         out_values, CudaSampler::Function::gaussian, debug);
 }
@@ -235,7 +226,6 @@ torch::Tensor SampleGaussiansDerivativeCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
 	const torch::Tensor& binning_buffer,
@@ -252,7 +242,7 @@ torch::Tensor SampleGaussiansDerivativeCUDA(
     torch::Tensor out_values = torch::full({N, D, C}, 0.0, float_opts);
 
     return SampleGaussiansCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         out_values, CudaSampler::Function::derivative, debug);
 }
@@ -261,7 +251,6 @@ torch::Tensor SampleGaussiansLaplacianCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
 	const torch::Tensor& binning_buffer,
@@ -278,17 +267,16 @@ torch::Tensor SampleGaussiansLaplacianCUDA(
     torch::Tensor out_values = torch::full({N, D, D, C}, 0.0, float_opts);
 
     return SampleGaussiansCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         out_values, CudaSampler::Function::laplacian, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL_dout_values,
@@ -298,17 +286,16 @@ SampleGaussiansBackwardCUDA(
 	const torch::Tensor& sample_ranges,
     const bool debug) {
     return SampleGaussiansBackwardCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         dL_dout_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         CudaSampler::Function::gaussian, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansDerivativeBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL_dout_values,
@@ -318,17 +305,16 @@ SampleGaussiansDerivativeBackwardCUDA(
 	const torch::Tensor& sample_ranges,
     const bool debug) {
     return SampleGaussiansBackwardCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         dL_dout_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         CudaSampler::Function::derivative, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansLaplacianBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
-    const torch::Tensor& opacities,
     const torch::Tensor& samples,
     const int num_rendered,
     const torch::Tensor& dL_dout_values,
@@ -338,7 +324,7 @@ SampleGaussiansLaplacianBackwardCUDA(
 	const torch::Tensor& sample_ranges,
     const bool debug) {
     return SampleGaussiansBackwardCUDAGeneric(
-        means, values, conics, opacities, samples, num_rendered,
+        means, values, conics, samples, num_rendered,
         dL_dout_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         CudaSampler::Function::laplacian, debug);
 }

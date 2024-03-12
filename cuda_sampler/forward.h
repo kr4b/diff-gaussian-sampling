@@ -32,7 +32,6 @@ namespace FORWARD {
 		const FLOAT* values,
 		const FLOAT* covariances,
 		const FLOAT* conics,
-		const FLOAT* opacities,
 		FLOAT* radii,
 		const int* grid,
 		const FLOAT* grid_offset,
@@ -50,7 +49,6 @@ namespace FORWARD {
 		const FLOAT* means,
 		const FLOAT* values,
 		const FLOAT* conics,
-		const FLOAT* opacities,
 		const FLOAT* samples,
 		FLOAT* out_values);
 }

@@ -36,13 +36,11 @@ namespace BACKWARD {
         const FLOAT* means,
         const FLOAT* values,
         const FLOAT* conics,
-        const FLOAT* opacities,
         const FLOAT* samples,
         const FLOAT* dL_dout_values,
         FLOAT* dL_dmeans,
         FLOAT* dL_dvalues,
         FLOAT* dL_dconics,
-        FLOAT* dL_dopacities,
         FLOAT* dL_dsamples);
 }
 

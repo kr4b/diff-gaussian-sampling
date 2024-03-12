@@ -27,7 +27,6 @@ __global__ void preprocessCUDA(
     const FLOAT* values,
     const FLOAT* covariances,
     const FLOAT* conics,
-    const FLOAT* opacities,
     FLOAT* radii,
     const int* grid,
     const FLOAT* grid_offset,
@@ -83,7 +82,7 @@ __global__ void preprocessCUDA(
 	tiles_touched[idx] = touched;
 }
 
-typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, FLOAT, int, int, int);
+typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, int, int, int);
 
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
@@ -98,7 +97,6 @@ __global__ void renderCUDA(
 	const FLOAT* __restrict__ means,
 	const FLOAT* __restrict__ values,
 	const FLOAT* __restrict__ conics,
-	const FLOAT* __restrict__ opacities,
     const FLOAT* __restrict__ samples,
 	FLOAT* __restrict__ out_values)
 {
@@ -141,7 +139,6 @@ __global__ void renderCUDA(
             const FLOAT* mean = means + id * D;
             const FLOAT* con = conics + id * D * D;
             const FLOAT* value = values + id * C;
-            const FLOAT opacity = opacities[id];
 
             for (int s = 0; s < samples_per_thread; s++) {
                 if (sample_offset + s >= num_samples)
@@ -152,7 +149,7 @@ __global__ void renderCUDA(
 
                 for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
 
-                F(X, con, value, out_values, opacity, sample_id, D, C);
+                F(X, con, value, out_values, sample_id, D, C);
             }
         }
     }
@@ -160,31 +157,31 @@ __global__ void renderCUDA(
     delete X;
 }
 
-__forceinline__ __device__ void gaussian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+__forceinline__ __device__ void gaussian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, int sample_id, int D, int C) {
     if (D == 1) {
         const FLOAT power = -0.5 * con[0] * X[0] * X[0];
         if (power > 0.0) return;
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++)
             out_values[sample_id * C + ch] += values[ch] * alpha;
     } else if (D == 2) {
         const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++)
             out_values[sample_id * C + ch] += values[ch] * alpha;
     }
 }
 
-__forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+__forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, int sample_id, int D, int C) {
     if (D == 1) {
         const FLOAT x1 = con[0] * X[0];
         const FLOAT power = -0.5 * x1 * X[0];
         if (power > 0.0) return;
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++) {
             out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * x1;
         }
@@ -194,7 +191,7 @@ __forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT*
         const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++) {
             out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * (x1 + con[1] * X[1]);
             out_values[(sample_id * D + 1) * C + ch] += values[ch] * alpha * (x2 + con[1] * X[0]);
@@ -202,13 +199,13 @@ __forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT*
     }
 }
 
-__forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, FLOAT opacity, int sample_id, int D, int C) {
+__forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, int sample_id, int D, int C) {
     if (D == 1) {
         const FLOAT x1 = con[0] * X[0];
         const FLOAT power = -0.5 * x1 * X[0];
         if (power > 0.0) return;
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++) {
             out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * (x1 * x1 - con[0]);
         }
@@ -221,7 +218,7 @@ __forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* 
         const FLOAT a1 = x1 + con[1] * X[1];
         const FLOAT a2 = x2 + con[1] * X[0];
 
-        const FLOAT alpha = opacity * exp(power);
+        const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++) {
             out_values[(sample_id * D * D + 0) * C + ch] += values[ch] * alpha * (a1 * a1 - con[0]);
             out_values[(sample_id * D * D + 1) * C + ch] += values[ch] * alpha * (a1 * a2 - con[1]);
@@ -242,7 +239,6 @@ void FORWARD::render(
     const FLOAT* means,
     const FLOAT* values,
     const FLOAT* conics,
-    const FLOAT* opacities,
 	const FLOAT* samples,
     FLOAT* out_values)
 {
@@ -257,7 +253,6 @@ void FORWARD::render(
                 means,
                 values,
                 conics,
-                opacities,
                 samples,
                 out_values);
             break;
@@ -271,7 +266,6 @@ void FORWARD::render(
                 means,
                 values,
                 conics,
-                opacities,
                 samples,
                 out_values);
             break;
@@ -285,7 +279,6 @@ void FORWARD::render(
                 means,
                 values,
                 conics,
-                opacities,
                 samples,
                 out_values);
             break;
@@ -298,7 +291,6 @@ void FORWARD::preprocess(
     const FLOAT* values,
     const FLOAT* covariances,
     const FLOAT* conics,
-    const FLOAT* opacities,
     FLOAT* radii,
     const int* grid,
     const FLOAT* grid_offset,
@@ -310,7 +302,6 @@ void FORWARD::preprocess(
         values,
         covariances,
         conics,
-        opacities,
         radii,
         grid,
         grid_offset,
