@@ -27,28 +27,24 @@ def sample_gaussians_derivative(debug, *args):
 def sample_gaussians_laplacian(debug, *args):
     return _SampleGaussiansLaplacian.apply(debug, *args)
 
+def aggregate_neighbors(means, radii, features, distance_transforms, debug):
+    return _AggregateNeighbors.apply(means, radii, features, distance_transforms, debug)
+
 def call_debug(func, debug, name, *args):
     if debug:
         cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
         try:
             results = func(*args)
         except Exception as ex:
-            torch.save(cpu_args, "snapshot_preprocess.dump")
-            print("\nAn error occured in preprocessing. Please forward snapshot_preprocess.dump for debugging.")
+            torch.save(cpu_args, "snapshot_{}.dump".format(name))
+            print("\nAn error occured in {}. Please forward snapshot_{}.dump for debugging.".format(name, name))
             raise ex
     else:
         results = func(*args)
 
     return results
 
-def preprocess_gaussians(
-    means,
-    values,
-    covariances,
-    conics,
-    samples,
-    debug,
-):
+def preprocess_gaussians(means, values, covariances, conics, samples, debug):
     # Restructure arguments the way that the C++ lib expects them
     args = (
         means,
@@ -98,7 +94,7 @@ def call_backward(ctx, func, grad_out, name):
 
     grad_means, grad_values, grad_conics, grad_samples = call_debug(func, debug, name, *args)
 
-    grads = (
+    return (
         grad_means,
         grad_values,
         grad_conics,
@@ -110,8 +106,6 @@ def call_backward(ctx, func, grad_out, name):
         None,
         None,
     )
-
-    return grads
 
 class _SampleGaussians(torch.autograd.Function):
     @staticmethod
@@ -140,6 +134,33 @@ class _SampleGaussiansLaplacian(torch.autograd.Function):
     def backward(ctx, grad_out):
         return call_backward(ctx, _C.sample_gaussians_laplacian_backward, grad_out, "lap_bw")
 
+class _AggregateNeighbors(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, means, radii, features, distance_transforms, debug):
+        ctx.debug = debug
+        ctx.features = features
+        args = (means, radii, features, distance_transforms, debug)
+        indices, dists, factors, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+        ctx.indices = indices
+        ctx.dists = dists
+        ctx.factors = factors
+        return indices, neighbor_features
+
+    @staticmethod
+    def backward(ctx, grad_indices, grad_out):
+        grad_features, grad_distance_transforms = call_debug(
+            _C.aggregate_neighbors_backward, ctx.debug, "aggregate_bw",
+            ctx.features, ctx.indices, ctx.dists, ctx.factors, grad_out, ctx.debug
+        )
+
+        return (
+            None,
+            None,
+            grad_features,
+            grad_distance_transforms,
+            None,
+        )
+
 class GaussianSampler:
     def __init__(self, debug):
         self.debug = debug
@@ -147,7 +168,7 @@ class GaussianSampler:
     def preprocess(self, means, values, covariances, conics, samples):
         debug = self.debug
 
-        num_rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges = \
+        num_rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges, radii = \
             preprocess_gaussians(means, values, covariances, conics, samples, debug)
 
         self.means = means
@@ -159,6 +180,7 @@ class GaussianSampler:
         self.sample_binning_buffer = sample_binning_buffer
         self.ranges = ranges
         self.sample_ranges = sample_ranges
+        self.radii = radii
 
     def sample_gaussians(self):
         return sample_gaussians(
@@ -201,3 +223,6 @@ class GaussianSampler:
             self.sample_ranges,
             self.debug,
         )
+
+    def aggregate_neighbors(self, features, distance_transforms):
+        return aggregate_neighbors(self.means, self.radii, features, distance_transforms, self.debug)

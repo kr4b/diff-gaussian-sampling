@@ -56,8 +56,8 @@ __global__ void preprocessCUDA(
         if (det == 0.0)
             return;
         FLOAT mid = 0.5f * (cov[0] + cov[3]);
-        FLOAT lambda1 = mid + sqrt(max(0.1f, mid * mid - det)) / 2.0;
-        my_radius = 3.0 * sqrt(lambda1);
+        FLOAT lambda = mid + sqrt(max(1e-6, mid * mid - det));
+        my_radius = 3.0 * sqrt(lambda);
     }
 
     uint* rect_min = new uint[D];

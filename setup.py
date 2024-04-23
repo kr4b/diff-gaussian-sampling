@@ -24,6 +24,7 @@ setup(
             "cuda_sampler/sampler_impl.cu",
             "cuda_sampler/forward.cu",
             "cuda_sampler/backward.cu",
+            "aggregate_neighbors.cu",
             "sample_points.cu",
             "ext.cpp"],
             extra_compile_args={"nvcc": ["-g", "-Xcompiler", "-fno-gnu-unique", "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party/glm/")]})

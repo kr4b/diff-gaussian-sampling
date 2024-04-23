@@ -14,6 +14,7 @@
 
 #include <torch/extension.h>
 #include "sample_points.h"
+#include "aggregate_neighbors.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("preprocess_gaussians", &PreprocessCUDA);
@@ -23,4 +24,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("sample_gaussians_derivative_backward", &SampleGaussiansDerivativeBackwardCUDA);
   m.def("sample_gaussians_laplacian", &SampleGaussiansLaplacianCUDA);
   m.def("sample_gaussians_laplacian_backward", &SampleGaussiansLaplacianBackwardCUDA);
+  m.def("aggregate_neighbors", &AggregateNeighborsCUDA);
+  m.def("aggregate_neighbors_backward", &AggregateNeighborsBackwardCUDA);
 }

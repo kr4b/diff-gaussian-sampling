@@ -17,7 +17,7 @@
 #include <cstdio>
 #include <tuple>
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 PreprocessCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,

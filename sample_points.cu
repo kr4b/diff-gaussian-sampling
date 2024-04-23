@@ -34,7 +34,7 @@ std::function<char*(size_t N)> resize_functional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 PreprocessCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -94,7 +94,7 @@ PreprocessCUDA(
             debug);
     }
 
-    return std::make_tuple(rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges);
+    return std::make_tuple(rendered, binning_buffer, sample_binning_buffer, ranges, sample_ranges, radii);
 }
 
 torch::Tensor SampleGaussiansCUDAGeneric(
