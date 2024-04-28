@@ -139,18 +139,18 @@ class _AggregateNeighbors(torch.autograd.Function):
     def forward(ctx, means, radii, features, distance_transforms, debug):
         ctx.debug = debug
         ctx.features = features
+        ctx.distance_transforms = distance_transforms
         args = (means, radii, features, distance_transforms, debug)
-        indices, dists, factors, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+        indices, dists, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
         ctx.indices = indices
         ctx.dists = dists
-        ctx.factors = factors
         return indices, neighbor_features
 
     @staticmethod
     def backward(ctx, grad_indices, grad_out):
         grad_features, grad_distance_transforms = call_debug(
             _C.aggregate_neighbors_backward, ctx.debug, "aggregate_bw",
-            ctx.features, ctx.indices, ctx.dists, ctx.factors, grad_out, ctx.debug
+            ctx.features, ctx.indices, ctx.dists, ctx.distance_transforms, grad_out, ctx.debug
         )
 
         return (

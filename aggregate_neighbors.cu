@@ -18,7 +18,6 @@ __global__ void findCollisions(
     const FLOAT* distance_transforms,
     bool* indices,
     FLOAT* dists,
-    FLOAT* factors,
     FLOAT* neighbor_features)
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -27,11 +26,10 @@ __global__ void findCollisions(
 
     const FLOAT* my_mean = means + idx * D;
     const FLOAT my_radius = radii[idx] * 0.333;
-    const FLOAT my_inv_radius = 1.0 / my_radius;
+    const FLOAT my_inv_radius = 1.0 / (my_radius + 1e-6);
     const FLOAT* my_distance_transform = distance_transforms + idx * L * (D*E+1);
     bool* my_indices = indices + idx * P;
     FLOAT* my_dists = dists + idx * D * P;
-    FLOAT* my_factors = factors + idx * P * L;
     FLOAT* my_neighbor_feature = neighbor_features + idx * L;
 
     for (int i = 0; i < P; i++) {
@@ -40,7 +38,6 @@ __global__ void findCollisions(
         const FLOAT other_radius = radii[i] * 0.333;
         const FLOAT* other_feature = features + i * L;
         FLOAT* other_dists = my_dists + i * D;
-        FLOAT* other_factors = my_factors + i * L;
 
         FLOAT dist = 0.0;
         for (int j = 0; j < D; j++) {
@@ -69,19 +66,20 @@ __global__ void findCollisions(
 
             // TODO: Is there some built-in parallel function to do this for an entire array?
             for (int j = 0; j < L; j++) {
+                FLOAT factor = 1.0;
                 for (int k = 0; k < D; k++) {
                     if (other_dists[k] >= 0) {
-                        other_factors[j] += my_distance_transform[j*(D*E+1) + k*E] / (other_dists[k] + 1.0);
+                        factor += my_distance_transform[j*(D*E+1) + k*E] / (other_dists[k] + 1.0);
                     } else {
-                        other_factors[j] -= my_distance_transform[j*(D*E+1) + k*E] / (-other_dists[k] + 1.0);
+                        factor -= my_distance_transform[j*(D*E+1) + k*E] / (-other_dists[k] + 1.0);
                     }
                     for (int l = 0; l < E / 2; l++) {
-                        other_factors[j] += my_distance_transform[j*(D*E+1) + k*E + l*2 + 1] * sin(3 * l * M_PI * other_dists[k]);
-                        other_factors[j] += my_distance_transform[j*(D*E+1) + k*E + l*2 + 2] * cos(3 * l * M_PI * other_dists[k]);
+                        factor += my_distance_transform[j*(D*E+1) + k*E + l*2 + 1] * sin(3 * l * M_PI * other_dists[k]);
+                        factor += my_distance_transform[j*(D*E+1) + k*E + l*2 + 2] * cos(3 * l * M_PI * other_dists[k]);
                     }
                 }
-                other_factors[j] += my_distance_transform[j*(D*E+1) + D*E];
-                my_neighbor_feature[j] += other_factors[j] * other_feature[j];
+                factor += my_distance_transform[j*(D*E+1) + D*E];
+                my_neighbor_feature[j] += factor * other_feature[j];
             }
         }
     }
@@ -92,7 +90,7 @@ __global__ void findCollisionsBackward(
     const FLOAT* features,
     const bool* indices,
     const FLOAT* dists,
-    const FLOAT* factors,
+    const FLOAT* distance_transforms,
     const FLOAT* inv_counts,
     const FLOAT* dL_dneighbor_features,
     FLOAT* dL_dfeatures,
@@ -103,7 +101,7 @@ __global__ void findCollisionsBackward(
 		return;
 
     const bool* my_indices = indices + idx * P;
-    const FLOAT* my_factors = factors + idx * P * L;
+    const FLOAT* my_distance_transform = distance_transforms + idx * L * (D*E+1);
     const FLOAT* my_dists = dists + idx * D * P;
     const FLOAT my_inv_count = inv_counts[idx];
     const FLOAT* my_dL = dL_dneighbor_features + idx * L;
@@ -112,34 +110,42 @@ __global__ void findCollisionsBackward(
     for (int i = 0; i < P; i++) {
         if (i == idx || !my_indices[i]) continue;
         const FLOAT* other_feature = features + i * L;
-        const FLOAT* other_factors = my_factors + i * L;
         const FLOAT* other_dists = my_dists + i * D;
         FLOAT* other_dL_dfeatures = dL_dfeatures + i * L;
 
         for (int j = 0; j < L; j++) {
             const FLOAT dc = my_dL[j] * my_inv_count;
-            atomicAdd(other_dL_dfeatures + j, dc * other_factors[j]);
-
-            FLOAT* other_dL_ddt = my_dL_ddt + j*(D*E+1);
-
             const FLOAT dcf = dc * other_feature[j];
+            FLOAT* other_dL_ddt = my_dL_ddt + j*(D*E+1);
+            FLOAT factor = 1.0;
             for (int k = 0; k < D; k++) {
                 if (other_dists[k] >= 0) {
-                    other_dL_ddt[k*E] += dcf / (other_dists[k] + 1.0);
+                    const FLOAT f = other_dists[k] + 1.0;
+                    other_dL_ddt[k*E] += dcf / f;
+                    factor += my_distance_transform[j*(D*E+1) + k*E] / f;
                 } else {
-                    other_dL_ddt[k*E] += -dcf / (-other_dists[k] + 1.0);
+                    const FLOAT f = -other_dists[k] + 1.0;
+                    other_dL_ddt[k*E] += -dcf / f;
+                    factor -= my_distance_transform[j*(D*E+1) + k*E] / f;
                 }
                 for (int l = 0; l < E / 2; l++) {
-                    other_dL_ddt[k*E + l*2 + 1] += dcf * sin(3 * l * M_PI * other_dists[k]);
-                    other_dL_ddt[k*E + l*2 + 2] += dcf * cos(3 * l * M_PI * other_dists[k]);
+                    const FLOAT fs = sin(3 * l * M_PI * other_dists[k]);
+                    const FLOAT fc = cos(3 * l * M_PI * other_dists[k]);
+                    other_dL_ddt[k*E + l*2 + 1] += dcf * fs;
+                    factor += my_distance_transform[j*(D*E+1) + k*E + l*2 + 1] * fs;
+                    other_dL_ddt[k*E + l*2 + 2] += dcf * fc;
+                    factor += my_distance_transform[j*(D*E+1) + k*E + l*2 + 2] * fc;
                 }
             }
             other_dL_ddt[D*E] += dcf;
+            factor += my_distance_transform[j*(D*E+1) + D*E];
+
+            atomicAdd(other_dL_dfeatures + j, dc * factor);
         }
     }
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsCUDA(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsCUDA(
     const torch::Tensor& means,
     const torch::Tensor& radii,
     const torch::Tensor& features,
@@ -149,12 +155,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> Aggregate
     const int P = means.size(0);
     const int D = means.size(-1);
     const int L = features.size(-1);
-    const int E = 7;
+    const int E = 5;
 
     torch::Tensor indices = torch::full({P, P}, false, means.options().dtype(torch::kBool));
     torch::Tensor neighbor_features = torch::full({P, L}, 0, means.options());
     torch::Tensor dists = torch::full({P, P, D}, 0, means.options());
-    torch::Tensor factors = torch::full({P, P, L}, 1.0, means.options());
     // torch::Tensor bounding_boxes = torch::full({P, D*2}, 0, means.options());
 
 	findCollisions << <(P + 255) / 256, 256 >> > (
@@ -165,29 +170,28 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> Aggregate
         distance_transforms.contiguous().data<FLOAT>(),
         indices.contiguous().data<bool>(),
         dists.contiguous().data<FLOAT>(),
-        factors.contiguous().data<FLOAT>(),
         neighbor_features.contiguous().data<FLOAT>()
     )
     CHECK_CUDA(, debug)
 
-    const torch::Tensor counts = indices.sum(-1).unsqueeze(-1);
-    return std::make_tuple(indices, dists, factors, neighbor_features / counts);
+    const torch::Tensor counts = indices.sum(-1).unsqueeze(-1).clamp(1);
+    return std::make_tuple(indices, dists, neighbor_features / counts);
 }
 
 std::tuple<torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
     const torch::Tensor& features,
     const torch::Tensor& indices,
     const torch::Tensor& dists,
-    const torch::Tensor& factors,
+    const torch::Tensor& distance_transforms,
     const torch::Tensor& dL_dneighbor_features,
     const bool debug)
 {
     const int P = features.size(0);
     const int D = dists.size(-1);
     const int L = features.size(-1);
-    const int E = 7;
+    const int E = 5;
 
-    const torch::Tensor inv_counts = 1.0 / indices.sum(-1).to(features.dtype());
+    const torch::Tensor inv_counts = 1.0 / indices.sum(-1).clamp(1).to(features.dtype());
     torch::Tensor dL_dfeatures = torch::full({P, L}, 0, features.options());
     torch::Tensor dL_ddistance_transforms = torch::full({P, L, D*E+1}, 0, features.options());
 
@@ -196,7 +200,7 @@ std::tuple<torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
         features.contiguous().data<FLOAT>(),
         indices.contiguous().data<bool>(),
         dists.contiguous().data<FLOAT>(),
-        factors.contiguous().data<FLOAT>(),
+        distance_transforms.contiguous().data<FLOAT>(),
         inv_counts.contiguous().data<FLOAT>(),
         dL_dneighbor_features.contiguous().data<FLOAT>(),
         dL_dfeatures.contiguous().data<FLOAT>(),
