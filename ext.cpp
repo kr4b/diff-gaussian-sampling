@@ -24,6 +24,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("sample_gaussians_derivative_backward", &SampleGaussiansDerivativeBackwardCUDA);
   m.def("sample_gaussians_laplacian", &SampleGaussiansLaplacianCUDA);
   m.def("sample_gaussians_laplacian_backward", &SampleGaussiansLaplacianBackwardCUDA);
+  m.def("sample_gaussians_third_derivative", &SampleGaussiansThirdCUDA);
+  m.def("sample_gaussians_third_derivative_backward", &SampleGaussiansThirdBackwardCUDA);
   m.def("aggregate_neighbors", &AggregateNeighborsCUDA);
   m.def("aggregate_neighbors_backward", &AggregateNeighborsBackwardCUDA);
 }

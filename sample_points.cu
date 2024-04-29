@@ -272,6 +272,31 @@ torch::Tensor SampleGaussiansLaplacianCUDA(
         out_values, CudaSampler::Function::laplacian, debug);
 }
 
+torch::Tensor SampleGaussiansThirdCUDA(
+    const torch::Tensor& means,
+    const torch::Tensor& values,
+    const torch::Tensor& conics,
+    const torch::Tensor& samples,
+    const int num_rendered,
+	const torch::Tensor& binning_buffer,
+	const torch::Tensor& sample_binning_buffer,
+    const torch::Tensor& ranges,
+	const torch::Tensor& sample_ranges,
+    const bool debug)
+{
+    const int D = means.size(-1);
+    const int N = samples.size(0);
+    const int C = values.size(-1);
+
+    auto float_opts = means.options().dtype(means.dtype());
+    torch::Tensor out_values = torch::full({N, D, D, D, C}, 0.0, float_opts);
+
+    return SampleGaussiansCUDAGeneric(
+        means, values, conics, samples, num_rendered,
+        binning_buffer, sample_binning_buffer, ranges, sample_ranges,
+        out_values, CudaSampler::Function::third, debug);
+}
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
@@ -327,4 +352,23 @@ SampleGaussiansLaplacianBackwardCUDA(
         means, values, conics, samples, num_rendered,
         dL_dout_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges,
         CudaSampler::Function::laplacian, debug);
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+SampleGaussiansThirdBackwardCUDA(
+    const torch::Tensor& means,
+    const torch::Tensor& values,
+    const torch::Tensor& conics,
+    const torch::Tensor& samples,
+    const int num_rendered,
+    const torch::Tensor& dL_dout_values,
+	const torch::Tensor& binning_buffer,
+	const torch::Tensor& sample_binning_buffer,
+    const torch::Tensor& ranges,
+	const torch::Tensor& sample_ranges,
+    const bool debug) {
+    return SampleGaussiansBackwardCUDAGeneric(
+        means, values, conics, samples, num_rendered,
+        dL_dout_values, binning_buffer, sample_binning_buffer, ranges, sample_ranges,
+        CudaSampler::Function::third, debug);
 }

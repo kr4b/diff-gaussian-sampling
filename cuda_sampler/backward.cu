@@ -147,8 +147,8 @@ __forceinline__ __device__ void gaussian(
         atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
 
         atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
-        atomicAdd(dL_dconics + 1, -0.5 * gdy * X[0] * dL_dG);
-        atomicAdd(dL_dconics + 2, -0.5 * gdx * X[1] * dL_dG);
+        atomicAdd(dL_dconics + 1, -gdy * X[0] * dL_dG);
+        // atomicAdd(dL_dconics + 2, -gdx * X[1] * dL_dG);
         atomicAdd(dL_dconics + 3, -0.5 * gdy * X[1] * dL_dG);
     }
 }
@@ -168,17 +168,15 @@ __forceinline__ __device__ void gaussian_derivative(
         FLOAT dL_dG = 0.0;
         for (int ch = 0; ch < C; ch++) {
             const FLOAT dL_dchannel = dL_dout_values[(sample_id * D + 0) * C + ch];
-            const FLOAT gx = x1 * dL_dchannel;
-            atomicAdd(dL_dvalues + ch, gx * G);
+            atomicAdd(dL_dvalues + ch, x1 * dL_dchannel * G);
             dL_dG += values[ch] * dL_dchannel;
         }
 
-        const FLOAT gx = x1 * dL_dG;
         const FLOAT dL_dx = (x1 * x1 - con[0]) * dL_dG * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dconics + 0, (X[0] * dL_dG - 0.5 * X[0] * X[0] * gx) * G);
+        atomicAdd(dL_dconics + 0, (X[0] - 0.5 * X[0] * X[0] * x1) * dL_dG * G);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
         const FLOAT x2 = con[3] * X[1];
@@ -211,8 +209,8 @@ __forceinline__ __device__ void gaussian_derivative(
         atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
 
         atomicAdd(dL_dconics + 0, (X[0] * dL_dGx - 0.5 * X[0] * X[0] * gx) * G);
-        atomicAdd(dL_dconics + 1, 0.5 * (X[1] * dL_dGx + X[0] * dL_dGy - X[0] * X[1] * gx) * G);
-        atomicAdd(dL_dconics + 2, 0.5 * (X[0] * dL_dGy + X[1] * dL_dGx - X[1] * X[0] * gx) * G);
+        atomicAdd(dL_dconics + 1, (X[1] * dL_dGx + X[0] * dL_dGy - X[0] * X[1] * gx) * G);
+        // atomicAdd(dL_dconics + 2, (X[0] * dL_dGy + X[1] * dL_dGx - X[1] * X[0] * gx) * G);
         atomicAdd(dL_dconics + 3, (X[1] * dL_dGy - 0.5 * X[1] * X[1] * gx) * G);
     }
 }
@@ -237,13 +235,14 @@ __forceinline__ __device__ void gaussian_laplacian(
             dL_dG += values[ch] * dL_dchannel;
         }
 
-        const FLOAT gx = (x1 * x1 - con[0]) * dL_dG;
-        const FLOAT dL_dx = (x1 * x1 * x1 - 3.0 * con[0] * x1) * dL_dG;
-        const FLOAT dV_dc = -0.5 * (x1 * x1 - con[0]) * X[0] * X[0] + 2.0 * x1 * X[0] - 1.0;
+        const FLOAT dL_dx = (x1 * x1 * x1 - 3.0 * con[0] * x1) * dL_dG * G;
+        const FLOAT dV_dc = (2.0 * x1 * X[0]
+                          -  0.5 * (x1 * x1 - con[0]) * X[0] * X[0]
+                          -  1.0) * dL_dG * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dconics + 0, dV_dc * dL_dG * G);
+        atomicAdd(dL_dconics + 0, dV_dc);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
         const FLOAT x2 = con[3] * X[1];
@@ -254,6 +253,10 @@ __forceinline__ __device__ void gaussian_laplacian(
         const FLOAT a1 = x1 + con[1] * X[1];
         const FLOAT a2 = x2 + con[1] * X[0];
 
+        const FLOAT dxx = a1 * a1 - con[0];
+        const FLOAT dxy = a1 * a2 - con[1];
+        const FLOAT dyy = a2 * a2 - con[3];
+
         FLOAT dL_dGxx = 0.0;
         FLOAT dL_dGxy = 0.0;
         FLOAT dL_dGyx = 0.0;
@@ -263,10 +266,8 @@ __forceinline__ __device__ void gaussian_laplacian(
             const FLOAT dL_dchannelxy = dL_dout_values[(sample_id * D * D + 1) * C + ch];
             const FLOAT dL_dchannelyx = dL_dout_values[(sample_id * D * D + 2) * C + ch];
             const FLOAT dL_dchannelyy = dL_dout_values[(sample_id * D * D + 3) * C + ch];
-            const FLOAT gxx = (a1 * a1 - con[0]) * dL_dchannelxx
-                            + (a1 * a2 - con[1]) * dL_dchannelxy
-                            + (a2 * a1 - con[1]) * dL_dchannelyx
-                            + (a2 * a2 - con[3]) * dL_dchannelyy;
+            const FLOAT gxx = dxx * dL_dchannelxx + dxy * dL_dchannelxy
+                            + dxy * dL_dchannelyx + dyy * dL_dchannelyy;
             atomicAdd(dL_dvalues + ch, gxx * G);
             dL_dGxx += values[ch] * dL_dchannelxx;
             dL_dGxy += values[ch] * dL_dchannelxy;
@@ -274,16 +275,14 @@ __forceinline__ __device__ void gaussian_laplacian(
             dL_dGyy += values[ch] * dL_dchannelyy;
         }
 
-        const FLOAT gxx = (a1 * a1 - con[0]) * dL_dGxx
-                        + (a1 * a2 - con[1]) * dL_dGxy
-                        + (a2 * a1 - con[1]) * dL_dGyx
-                        + (a2 * a2 - con[3]) * dL_dGyy;
         const FLOAT dL_dx = ((a1 * a1 * a1 - 3.0 * con[0] * a1) * dL_dGxx
                           +  (a1 * a2 * a1 - con[1] * a1 - (con[1] * a1 + con[0] * a2)) * (dL_dGxy + dL_dGyx)
-                          +  (a2 * a2 * a1 - con[3] * a1 - 2.0 * con[1] * a2) * dL_dGyy) * G;
+                          +  (a2 * a2 * a1 - con[3] * a1 - 2.0 * con[1] * a2) * dL_dGyy
+                          ) * G;
         const FLOAT dL_dy = ((a1 * a1 * a2 - con[0] * a2 - 2.0 * con[1] * a1) * dL_dGxx
                           +  (a1 * a2 * a2 - con[1] * a2 - (con[3] * a1 + con[1] * a2)) * (dL_dGxy + dL_dGyx)
-                          +  (a2 * a2 * a2 - 3.0 * con[3] * a2) * dL_dGyy) * G;
+                          +  (a2 * a2 * a2 - 3.0 * con[3] * a2) * dL_dGyy
+                          ) * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
@@ -291,22 +290,146 @@ __forceinline__ __device__ void gaussian_laplacian(
         atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
         atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
 
-        const FLOAT dVxx_dcxx = -0.5 * (a1 * a1 - con[0]) * X[0] * X[0] + 2.0 * a1 * X[0] - 1.0;
-        const FLOAT dVxy_dcxx = -0.5 * (a1 * a2 - con[1]) * X[0] * X[0] + a2 * X[0];
-        const FLOAT dVyy_dcxx = -0.5 * (a2 * a2 - con[3]) * X[0] * X[0];
+        const FLOAT dVxx_dcxx = -0.5 * dxx * X[0] * X[0] + 2.0 * a1 * X[0] - 1.0;
+        const FLOAT dVxy_dcxx = -0.5 * dxy * X[0] * X[0] + a2 * X[0];
+        const FLOAT dVyy_dcxx = -0.5 * dyy * X[0] * X[0];
 
-        const FLOAT dVxx_dcxy = -0.5 * (a1 * a1 - con[0]) * X[0] * X[1] + a1 * X[1];
-        const FLOAT dVxy_dcxy = -(a1 * a2 - con[1]) * X[0] * X[1] + a2 * X[1] + a1 * X[0] - 1.0;
-        const FLOAT dVyy_dcxy = -0.5 * (a2 * a2 - con[3]) * X[0] * X[1] + a2 * X[0];
+        const FLOAT dVxx_dcxy = -dxx * X[0] * X[1] + 2.0 * a1 * X[1];
+        const FLOAT dVxy_dcxy = -dxy * X[0] * X[1] + a2 * X[1] + a1 * X[0] - 1.0;
+        const FLOAT dVyy_dcxy = -dyy * X[0] * X[1] + 2.0 * a2 * X[0];
 
-        const FLOAT dVxx_dcyy = -0.5 * (a1 * a1 - con[0]) * X[1] * X[1];
-        const FLOAT dVxy_dcyy = -0.5 * (a1 * a2 - con[1]) * X[1] * X[1] + a1 * X[1];
-        const FLOAT dVyy_dcyy = -0.5 * (a2 * a2 - con[3]) * X[1] * X[1] + 2.0 * a2 * X[1] - 1.0;
+        const FLOAT dVxx_dcyy = -0.5 * dxx * X[1] * X[1];
+        const FLOAT dVxy_dcyy = -0.5 * dxy * X[1] * X[1] + a1 * X[1];
+        const FLOAT dVyy_dcyy = -0.5 * dyy * X[1] * X[1] + 2.0 * a2 * X[1] - 1.0;
 
         atomicAdd(dL_dconics + 0, (dVxx_dcxx * dL_dGxx + dVxy_dcxx * (dL_dGxy + dL_dGyx) + dVyy_dcxx * dL_dGyy) * G);
-        atomicAdd(dL_dconics + 1, (dVxx_dcxy * dL_dGxx + 0.5 * dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
-        atomicAdd(dL_dconics + 2, (dVxx_dcxy * dL_dGxx + 0.5 * dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
+        atomicAdd(dL_dconics + 1, (dVxx_dcxy * dL_dGxx + dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
+        // atomicAdd(dL_dconics + 2, (dVxx_dcxy * dL_dGxx + dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
         atomicAdd(dL_dconics + 3, (dVxx_dcyy * dL_dGxx + dVxy_dcyy * (dL_dGxy + dL_dGyx) + dVyy_dcyy * dL_dGyy) * G);
+    }
+}
+
+__forceinline__ __device__ void gaussian_third(
+    const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dsamples,
+    int sample_id, int D, int C)
+{
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+
+        FLOAT dL_dG = 0.0;
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannel = dL_dout_values[(sample_id * D * D * D + 0) * C + ch];
+            const FLOAT gx = (3.0 * con[0] * x1 - x1 * x1 * x1) * dL_dchannel;
+            atomicAdd(dL_dvalues + ch, gx * G);
+            dL_dG += values[ch] * dL_dchannel;
+        }
+
+        const FLOAT dL_dx = (6.0 * con[0] * x1 * x1
+                          -  x1 * x1 * x1 * x1
+                          -  3.0 * con[0] * con[0]) * dL_dG * G;
+        const FLOAT dV_dc = (2.0 * X[0] * X[0]
+                          -  2.0 * x1 * x1 * X[0]
+                          -  0.5 * (2.0 * X[0] * x1 - X[0]) * X[0] * X[0]
+                          +  0.5 * (x1 * x1 - con[0]) * x1 * X[0] * X[0]) * dL_dG * G;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dconics + 0, dV_dc);
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT G = exp(power);
+        const FLOAT a1 = x1 + con[1] * X[1];
+        const FLOAT a2 = x2 + con[1] * X[0];
+
+        const FLOAT dxxx = 3.0 * con[0] * a1 - a1 * a1 * a1;
+        const FLOAT dxxy = 2.0 * con[1] * a1 - a1 * a1 * a2 + con[0] * a2;
+        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[3] * a1;
+        const FLOAT dyyy = 3.0 * con[3] * a2 - a2 * a2 * a2;
+
+        FLOAT dL_dGxxx = 0.0;
+        FLOAT dL_dGxxy = 0.0;
+        FLOAT dL_dGxyx = 0.0;
+        FLOAT dL_dGxyy = 0.0;
+        FLOAT dL_dGyxx = 0.0;
+        FLOAT dL_dGyxy = 0.0;
+        FLOAT dL_dGyyx = 0.0;
+        FLOAT dL_dGyyy = 0.0;
+
+        for (int ch = 0; ch < C; ch++) {
+            const FLOAT dL_dchannelxxx = dL_dout_values[(sample_id * D * D * D + 0) * C + ch];
+            const FLOAT dL_dchannelxxy = dL_dout_values[(sample_id * D * D * D + 1) * C + ch];
+            const FLOAT dL_dchannelxyx = dL_dout_values[(sample_id * D * D * D + 2) * C + ch];
+            const FLOAT dL_dchannelxyy = dL_dout_values[(sample_id * D * D * D + 3) * C + ch];
+            const FLOAT dL_dchannelyxx = dL_dout_values[(sample_id * D * D * D + 4) * C + ch];
+            const FLOAT dL_dchannelyxy = dL_dout_values[(sample_id * D * D * D + 5) * C + ch];
+            const FLOAT dL_dchannelyyx = dL_dout_values[(sample_id * D * D * D + 6) * C + ch];
+            const FLOAT dL_dchannelyyy = dL_dout_values[(sample_id * D * D * D + 7) * C + ch];
+            const FLOAT gxx = dxxx * dL_dchannelxxx + dxxy * dL_dchannelxxy
+                            + dxxy * dL_dchannelxyx + dxyy * dL_dchannelxyy
+                            + dxxy * dL_dchannelyxx + dxyy * dL_dchannelyxy
+                            + dxyy * dL_dchannelyyx + dyyy * dL_dchannelyyy;
+            atomicAdd(dL_dvalues + ch, gxx * G);
+            dL_dGxxx += values[ch] * dL_dchannelxxx;
+            dL_dGxxy += values[ch] * dL_dchannelxxy;
+            dL_dGxyx += values[ch] * dL_dchannelxyx;
+            dL_dGxyy += values[ch] * dL_dchannelxyy;
+            dL_dGyxx += values[ch] * dL_dchannelyxx;
+            dL_dGyxy += values[ch] * dL_dchannelyxy;
+            dL_dGyyx += values[ch] * dL_dchannelyyx;
+            dL_dGyyy += values[ch] * dL_dchannelyyy;
+        }
+
+        const FLOAT dxxy_dx = 2.0 * a1 * a2 * con[0] + a1 * a1 * con[1] - 3.0 * con[0] * con[1];
+        const FLOAT dxyy_dx = 2.0 * a1 * a2 * con[1] + a2 * a2 * con[0] - con[3] * con[0] - 2.0 * con[1] * con[1];
+        const FLOAT dL_dx = ((dxxx * a1 - 3.0 * con[0] * con[0] + 3.0 * a1 * a1 * con[0]) * dL_dGxxx
+                          +  (dxxy * a1 + dxxy_dx) * dL_dGxxy + (dxxy * a1 + dxxy_dx) * dL_dGxyx
+                          +  (dxyy * a1 + dxyy_dx) * dL_dGxyy + (dxxy * a1 + dxxy_dx) * dL_dGyxx
+                          +  (dxyy * a1 + dxyy_dx) * dL_dGyxy + (dxyy * a1 + dxyy_dx) * dL_dGyyx
+                          +  (dyyy * a1 - 3.0 * con[3] * con[1] + 3.0 * a2 * a2 * con[1]) * dL_dGyyy
+                          ) * G;
+        const FLOAT dxxy_dy = 2.0 * a1 * a2 * con[1] + a1 * a1 * con[3] - con[0] * con[3] - 2.0 * con[1] * con[1];
+        const FLOAT dxyy_dy = 2.0 * a1 * a2 * con[3] + a2 * a2 * con[1] - 3.0 * con[3] * con[1];
+        const FLOAT dL_dy = ((dxxx * a2 - 3.0 * con[0] * con[1] + 3.0 * a1 * a1 * con[1]) * dL_dGxxx
+                          +  (dxxy * a2 + dxxy_dy) * dL_dGxxy + (dxxy * a2 + dxxy_dy) * dL_dGxyx
+                          +  (dxyy * a2 + dxyy_dy) * dL_dGxyy + (dxxy * a2 + dxxy_dy) * dL_dGyxx
+                          +  (dxyy * a2 + dxyy_dy) * dL_dGyxy + (dxyy * a2 + dxyy_dy) * dL_dGyyx
+                          +  (dyyy * a2 - 3.0 * con[3] * con[3] + 3.0 * a2 * a2 * con[3]) * dL_dGyyy
+                          ) * G;
+
+        atomicAdd(dL_dmeans + 0, -dL_dx);
+        atomicAdd(dL_dmeans + 1, -dL_dy);
+
+        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
+        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
+
+        const FLOAT dVxxx_dcxx = -0.5 * dxxx * X[0] * X[0] + 3.0 * con[0] * X[0] + 3.0 * a1 - 3.0 * a1 * a1 * X[0];
+        const FLOAT dVxxy_dcxx = -0.5 * dxxy * X[0] * X[0] + 2.0 * con[1] * X[0] - 2.0 * a1 * a2 * X[0] + a2;
+        const FLOAT dVxyy_dcxx = -0.5 * dxyy * X[0] * X[0] - a2 * a2 * X[0] + con[3] * X[0];
+        const FLOAT dVyyy_dcxx = -0.5 * dyyy * X[0] * X[0];
+
+        const FLOAT dVxxx_dcxy = -dxxx * X[0] * X[1] + 3.0 * con[0] * X[1] - 3.0 * a1 * a1 * X[1];
+        const FLOAT dVxxy_dcxy = -dxxy * X[0] * X[1] + 2.0 * con[1] * X[1] + 2.0 * a1 - 2.0 * a1 * a2 * X[1] - a1 * a1 * X[0] + con[0] * X[0];
+        const FLOAT dVxyy_dcxy = -dxyy * X[0] * X[1] + 2.0 * con[1] * X[0] + 2.0 * a2 - a2 * a2 * X[1] - 2.0 * a1 * a2 * X[0] + con[3] * X[1];
+        const FLOAT dVyyy_dcxy = -dyyy * X[0] * X[1] + 3.0 * con[3] * X[0] - 3.0 * a2 * a2 * X[0];
+
+        const FLOAT dVxxx_dcyy = -0.5 * dxxx * X[1] * X[1];
+        const FLOAT dVxxy_dcyy = -0.5 * dxxy * X[1] * X[1] - a1 * a1 * X[1] + con[0] * X[1];
+        const FLOAT dVxyy_dcyy = -0.5 * dxyy * X[1] * X[1] + 2.0 * con[1] * X[1] - 2.0 * a1 * a2 * X[1] + a1;
+        const FLOAT dVyyy_dcyy = -0.5 * dyyy * X[1] * X[1] + 3.0 * con[3] * X[1] + 3.0 * a2 - 3.0 * a2 * a2 * X[1];
+
+        atomicAdd(dL_dconics + 0, (dVxxx_dcxx * dL_dGxxx + dVxxy_dcxx * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxx * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxx * dL_dGyyy) * G);
+        atomicAdd(dL_dconics + 1, (dVxxx_dcxy * dL_dGxxx + dVxxy_dcxy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxy * dL_dGyyy) * G);
+        // atomicAdd(dL_dconics + 2, (dVxxx_dcxy * dL_dGxxx + dVxxy_dcxy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxy * dL_dGyyy) * G);
+        atomicAdd(dL_dconics + 3, (dVxxx_dcyy * dL_dGxxx + dVxxy_dcyy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcyy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcyy * dL_dGyyy) * G);
     }
 }
 
@@ -365,6 +488,23 @@ void BACKWARD::render(
             break;
         case CudaSampler::Function::laplacian:
             renderCUDA<gaussian_laplacian> << <blocks, NUM_THREADS >> >(
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                samples,
+                dL_dout_values,
+                dL_dmeans,
+                dL_dvalues,
+                dL_dconics,
+                dL_dsamples);
+            break;
+        case CudaSampler::Function::third:
+            renderCUDA<gaussian_third> << <blocks, NUM_THREADS >> >(
                 D, C,
                 ranges,
                 sample_ranges,

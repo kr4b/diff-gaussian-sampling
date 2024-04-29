@@ -27,6 +27,9 @@ def sample_gaussians_derivative(debug, *args):
 def sample_gaussians_laplacian(debug, *args):
     return _SampleGaussiansLaplacian.apply(debug, *args)
 
+def sample_gaussians_third_derivative(debug, *args):
+    return _SampleGaussiansThirdDerivative.apply(debug, *args)
+
 def aggregate_neighbors(means, radii, features, distance_transforms, debug):
     return _AggregateNeighbors.apply(means, radii, features, distance_transforms, debug)
 
@@ -105,6 +108,7 @@ def call_backward(ctx, func, grad_out, name):
         None,
         None,
         None,
+        None,
     )
 
 class _SampleGaussians(torch.autograd.Function):
@@ -133,6 +137,16 @@ class _SampleGaussiansLaplacian(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out):
         return call_backward(ctx, _C.sample_gaussians_laplacian_backward, grad_out, "lap_bw")
+
+class _SampleGaussiansThirdDerivative(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, *args):
+        return call_forward(ctx, _C.sample_gaussians_third_derivative, "3_fw", *args)
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        return call_backward(ctx, _C.sample_gaussians_third_derivative_backward, grad_out, "3_bw")
+
 
 class _AggregateNeighbors(torch.autograd.Function):
     @staticmethod
@@ -212,6 +226,20 @@ class GaussianSampler:
 
     def sample_gaussians_laplacian(self):
         return sample_gaussians_laplacian(
+            self.means,
+            self.values,
+            self.conics,
+            self.samples,
+            self.num_rendered,
+            self.binning_buffer,
+            self.sample_binning_buffer,
+            self.ranges,
+            self.sample_ranges,
+            self.debug,
+        )
+
+    def sample_gaussians_third_derivative(self):
+        return sample_gaussians_third_derivative(
             self.means,
             self.values,
             self.conics,

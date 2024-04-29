@@ -21,7 +21,7 @@
 #include "config.h"
 
 namespace CudaSampler {
-    enum Function { gaussian, derivative, laplacian };
+    enum Function { gaussian, derivative, laplacian, third };
 
     class Sampler {
 

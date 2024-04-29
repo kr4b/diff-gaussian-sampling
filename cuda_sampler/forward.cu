@@ -228,6 +228,44 @@ __forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* 
     }
 }
 
+__forceinline__ __device__ void gaussian_third(const FLOAT* X, const FLOAT* con, const FLOAT* values, FLOAT* out_values, int sample_id, int D, int C) {
+    if (D == 1) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT power = -0.5 * x1 * X[0];
+        if (power > 0.0) return;
+
+        const FLOAT alpha = exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D + 0) * C + ch] += values[ch] * alpha * (2.0 * con[0] * x1 - x1 * x1 * x1 + con[0] * x1);
+        }
+    } else if (D == 2) {
+        const FLOAT x1 = con[0] * X[0];
+        const FLOAT x2 = con[3] * X[1];
+        const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
+        if (power > 0.0) return;
+
+        const FLOAT a1 = x1 + con[1] * X[1];
+        const FLOAT a2 = x2 + con[1] * X[0];
+
+        const FLOAT dxxx = 3.0 * con[0] * a1 - a1 * a1 * a1;
+        const FLOAT dxxy = 2.0 * con[1] * a1 - a1 * a1 * a2 + con[0] * a2;
+        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[3] * a1;
+        const FLOAT dyyy = 3.0 * con[3] * a2 - a2 * a2 * a2;
+
+        const FLOAT alpha = exp(power);
+        for (int ch = 0; ch < C; ch++) {
+            out_values[(sample_id * D * D * D + 0) * C + ch] += values[ch] * alpha * dxxx;
+            out_values[(sample_id * D * D * D + 1) * C + ch] += values[ch] * alpha * dxxy;
+            out_values[(sample_id * D * D * D + 2) * C + ch] += values[ch] * alpha * dxxy;
+            out_values[(sample_id * D * D * D + 3) * C + ch] += values[ch] * alpha * dxyy;
+            out_values[(sample_id * D * D * D + 4) * C + ch] += values[ch] * alpha * dxxy;
+            out_values[(sample_id * D * D * D + 5) * C + ch] += values[ch] * alpha * dxyy;
+            out_values[(sample_id * D * D * D + 6) * C + ch] += values[ch] * alpha * dxyy;
+            out_values[(sample_id * D * D * D + 7) * C + ch] += values[ch] * alpha * dyyy;
+        }
+    }
+}
+
 void FORWARD::render(
     const int D, const int C,
     const int blocks,
@@ -271,6 +309,19 @@ void FORWARD::render(
             break;
         case CudaSampler::Function::laplacian:
             renderCUDA<gaussian_laplacian> << <blocks, NUM_THREADS >> > (
+                D, C,
+                ranges,
+                sample_ranges,
+                point_list,
+                sample_point_list,
+                means,
+                values,
+                conics,
+                samples,
+                out_values);
+            break;
+        case CudaSampler::Function::third:
+            renderCUDA<gaussian_third> << <blocks, NUM_THREADS >> > (
                 D, C,
                 ranges,
                 sample_ranges,

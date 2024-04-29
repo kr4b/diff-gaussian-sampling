@@ -62,6 +62,18 @@ torch::Tensor SampleGaussiansLaplacianCUDA(
     const torch::Tensor& sample_ranges,
     const bool debug);
 
+torch::Tensor SampleGaussiansThirdCUDA(
+    const torch::Tensor& means,
+    const torch::Tensor& values,
+    const torch::Tensor& conics,
+    const torch::Tensor& samples,
+    const int num_rendered,
+    const torch::Tensor& binning_buffer,
+    const torch::Tensor& sample_binning_buffer,
+    const torch::Tensor& ranges,
+    const torch::Tensor& sample_ranges,
+    const bool debug);
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
@@ -92,6 +104,20 @@ SampleGaussiansDerivativeBackwardCUDA(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansLaplacianBackwardCUDA(
+    const torch::Tensor& means,
+    const torch::Tensor& values,
+    const torch::Tensor& conics,
+    const torch::Tensor& samples,
+    const int num_rendered,
+    const torch::Tensor& dL_dout_values,
+    const torch::Tensor& binning_buffer,
+    const torch::Tensor& sample_binning_buffer,
+    const torch::Tensor& ranges,
+    const torch::Tensor& sample_ranges,
+    const bool debug);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+SampleGaussiansThirdBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
     const torch::Tensor& conics,
