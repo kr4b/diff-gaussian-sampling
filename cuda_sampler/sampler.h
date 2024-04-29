@@ -76,7 +76,6 @@ namespace CudaSampler {
             FLOAT* dL_dmeans,
             FLOAT* dL_dvalues,
             FLOAT* dL_dconics,
-            FLOAT* dL_dsamples,
             bool debug);
     };
 };

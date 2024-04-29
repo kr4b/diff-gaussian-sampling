@@ -40,8 +40,7 @@ namespace BACKWARD {
         const FLOAT* dL_dout_values,
         FLOAT* dL_dmeans,
         FLOAT* dL_dvalues,
-        FLOAT* dL_dconics,
-        FLOAT* dL_dsamples);
+        FLOAT* dL_dconics);
 }
 
 #endif

@@ -20,7 +20,7 @@ namespace cg = cooperative_groups;
 
 #define NUM_THREADS 256
 
-typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, FLOAT*, FLOAT*, FLOAT*, int, int, int);
+typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, FLOAT*, FLOAT*, int, int, int);
 
 // Backward version of the rendering procedure.
 template <gaussian_func F>
@@ -37,8 +37,7 @@ __global__ void renderCUDA(
 	const FLOAT* __restrict__ dL_dout_values,
 	FLOAT* __restrict__ dL_dmeans,
 	FLOAT* __restrict__ dL_dvalues,
-	FLOAT* __restrict__ dL_dconics,
-	FLOAT* __restrict__ dL_dsamples)
+	FLOAT* __restrict__ dL_dconics)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -87,7 +86,7 @@ __global__ void renderCUDA(
 
                 for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
 
-                F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * D, dL_dsamples, sample_id, D, C);
+                F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * D, sample_id, D, C);
             }
         }
     }
@@ -97,8 +96,7 @@ __global__ void renderCUDA(
 
 __forceinline__ __device__ void gaussian(
     const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
-    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dsamples,
-    int sample_id, int D, int C)
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, int sample_id, int D, int C)
 {
     if (D == 1) {
         FLOAT power = -0.5 * con[0] * X[0] * X[0];
@@ -118,7 +116,6 @@ __forceinline__ __device__ void gaussian(
         const FLOAT dL_dx = dL_dG * dG_ddelx;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
         atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
     } else if (D == 2) {
         FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
@@ -143,9 +140,6 @@ __forceinline__ __device__ void gaussian(
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
 
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
-
         atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
         atomicAdd(dL_dconics + 1, -gdy * X[0] * dL_dG);
         // atomicAdd(dL_dconics + 2, -gdx * X[1] * dL_dG);
@@ -155,8 +149,7 @@ __forceinline__ __device__ void gaussian(
 
 __forceinline__ __device__ void gaussian_derivative(
     const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
-    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dsamples,
-    int sample_id, int D, int C)
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, int sample_id, int D, int C)
 {
     if (D == 1) {
         const FLOAT x1 = con[0] * X[0];
@@ -175,7 +168,6 @@ __forceinline__ __device__ void gaussian_derivative(
         const FLOAT dL_dx = (x1 * x1 - con[0]) * dL_dG * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
         atomicAdd(dL_dconics + 0, (X[0] - 0.5 * X[0] * X[0] * x1) * dL_dG * G);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
@@ -205,9 +197,6 @@ __forceinline__ __device__ void gaussian_derivative(
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
 
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
-
         atomicAdd(dL_dconics + 0, (X[0] * dL_dGx - 0.5 * X[0] * X[0] * gx) * G);
         atomicAdd(dL_dconics + 1, (X[1] * dL_dGx + X[0] * dL_dGy - X[0] * X[1] * gx) * G);
         // atomicAdd(dL_dconics + 2, (X[0] * dL_dGy + X[1] * dL_dGx - X[1] * X[0] * gx) * G);
@@ -217,8 +206,7 @@ __forceinline__ __device__ void gaussian_derivative(
 
 __forceinline__ __device__ void gaussian_laplacian(
     const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
-    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dsamples,
-    int sample_id, int D, int C)
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, int sample_id, int D, int C)
 {
     if (D == 1) {
         const FLOAT x1 = con[0] * X[0];
@@ -241,7 +229,6 @@ __forceinline__ __device__ void gaussian_laplacian(
                           -  1.0) * dL_dG * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
         atomicAdd(dL_dconics + 0, dV_dc);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
@@ -287,9 +274,6 @@ __forceinline__ __device__ void gaussian_laplacian(
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
 
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
-
         const FLOAT dVxx_dcxx = -0.5 * dxx * X[0] * X[0] + 2.0 * a1 * X[0] - 1.0;
         const FLOAT dVxy_dcxx = -0.5 * dxy * X[0] * X[0] + a2 * X[0];
         const FLOAT dVyy_dcxx = -0.5 * dyy * X[0] * X[0];
@@ -311,8 +295,7 @@ __forceinline__ __device__ void gaussian_laplacian(
 
 __forceinline__ __device__ void gaussian_third(
     const FLOAT* X, const FLOAT* con, const FLOAT* values, const FLOAT* dL_dout_values,
-    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, FLOAT* dL_dsamples,
-    int sample_id, int D, int C)
+    FLOAT* dL_dmeans, FLOAT* dL_dvalues, FLOAT* dL_dconics, int sample_id, int D, int C)
 {
     if (D == 1) {
         const FLOAT x1 = con[0] * X[0];
@@ -338,7 +321,6 @@ __forceinline__ __device__ void gaussian_third(
                           +  0.5 * (x1 * x1 - con[0]) * x1 * X[0] * X[0]) * dL_dG * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
         atomicAdd(dL_dconics + 0, dV_dc);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
@@ -408,9 +390,6 @@ __forceinline__ __device__ void gaussian_third(
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
 
-        atomicAdd(dL_dsamples + sample_id * D + 0, dL_dx);
-        atomicAdd(dL_dsamples + sample_id * D + 1, dL_dy);
-
         const FLOAT dVxxx_dcxx = -0.5 * dxxx * X[0] * X[0] + 3.0 * con[0] * X[0] + 3.0 * a1 - 3.0 * a1 * a1 * X[0];
         const FLOAT dVxxy_dcxx = -0.5 * dxxy * X[0] * X[0] + 2.0 * con[1] * X[0] - 2.0 * a1 * a2 * X[0] + a2;
         const FLOAT dVxyy_dcxx = -0.5 * dxyy * X[0] * X[0] - a2 * a2 * X[0] + con[3] * X[0];
@@ -448,8 +427,7 @@ void BACKWARD::render(
     const FLOAT* dL_dout_values,
     FLOAT* dL_dmeans,
     FLOAT* dL_dvalues,
-    FLOAT* dL_dconics,
-    FLOAT* dL_dsamples)
+    FLOAT* dL_dconics)
 {
     switch (function) {
         case CudaSampler::Function::gaussian:
@@ -466,8 +444,7 @@ void BACKWARD::render(
                 dL_dout_values,
                 dL_dmeans,
                 dL_dvalues,
-                dL_dconics,
-                dL_dsamples);
+                dL_dconics);
             break;
         case CudaSampler::Function::derivative:
             renderCUDA<gaussian_derivative> << <blocks, NUM_THREADS >> >(
@@ -483,8 +460,7 @@ void BACKWARD::render(
                 dL_dout_values,
                 dL_dmeans,
                 dL_dvalues,
-                dL_dconics,
-                dL_dsamples);
+                dL_dconics);
             break;
         case CudaSampler::Function::laplacian:
             renderCUDA<gaussian_laplacian> << <blocks, NUM_THREADS >> >(
@@ -500,8 +476,7 @@ void BACKWARD::render(
                 dL_dout_values,
                 dL_dmeans,
                 dL_dvalues,
-                dL_dconics,
-                dL_dsamples);
+                dL_dconics);
             break;
         case CudaSampler::Function::third:
             renderCUDA<gaussian_third> << <blocks, NUM_THREADS >> >(
@@ -517,8 +492,7 @@ void BACKWARD::render(
                 dL_dout_values,
                 dL_dmeans,
                 dL_dvalues,
-                dL_dconics,
-                dL_dsamples);
+                dL_dconics);
             break;
     }
 }

@@ -142,7 +142,7 @@ torch::Tensor SampleGaussiansCUDAGeneric(
     return out_values;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDAGeneric(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -165,7 +165,6 @@ SampleGaussiansBackwardCUDAGeneric(
     torch::Tensor dL_dmeans = torch::zeros({P, D}, means.options());
     torch::Tensor dL_dvalues = torch::zeros({P, C}, means.options());
     torch::Tensor dL_dconics = torch::zeros({P, D, D}, means.options());
-    torch::Tensor dL_dsamples = torch::zeros({N, D}, means.options());
 
     if (P != 0 && N != 0) {
         const torch::Tensor min_bound = std::get<0>(samples.min(0));
@@ -190,11 +189,10 @@ SampleGaussiansBackwardCUDAGeneric(
             dL_dmeans.contiguous().data<FLOAT>(),
             dL_dvalues.contiguous().data<FLOAT>(),
             dL_dconics.contiguous().data<FLOAT>(),
-            dL_dsamples.contiguous().data<FLOAT>(),
             debug);
     }
 
-    return std::make_tuple(dL_dmeans, dL_dvalues, dL_dconics, dL_dsamples);
+    return std::make_tuple(dL_dmeans, dL_dvalues, dL_dconics);
 }
 
 torch::Tensor SampleGaussiansCUDA(
@@ -297,7 +295,7 @@ torch::Tensor SampleGaussiansThirdCUDA(
         out_values, CudaSampler::Function::third, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -316,7 +314,7 @@ SampleGaussiansBackwardCUDA(
         CudaSampler::Function::gaussian, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansDerivativeBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -335,7 +333,7 @@ SampleGaussiansDerivativeBackwardCUDA(
         CudaSampler::Function::derivative, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansLaplacianBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,
@@ -354,7 +352,7 @@ SampleGaussiansLaplacianBackwardCUDA(
         CudaSampler::Function::laplacian, debug);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 SampleGaussiansThirdBackwardCUDA(
     const torch::Tensor& means,
     const torch::Tensor& values,

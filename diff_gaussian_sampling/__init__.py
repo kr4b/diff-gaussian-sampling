@@ -95,13 +95,13 @@ def call_backward(ctx, func, grad_out, name):
         debug
     )
 
-    grad_means, grad_values, grad_conics, grad_samples = call_debug(func, debug, name, *args)
+    grad_means, grad_values, grad_conics = call_debug(func, debug, name, *args)
 
     return (
         grad_means,
         grad_values,
         grad_conics,
-        grad_samples,
+        None,
         None,
         None,
         None,

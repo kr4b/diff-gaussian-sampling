@@ -358,7 +358,6 @@ void CudaSampler::Sampler::backward(
     FLOAT* dL_dmeans,
     FLOAT* dL_dvalues,
     FLOAT* dL_dconics,
-    FLOAT* dL_dsamples,
     bool debug)
 {
     BinningState binning_state = BinningState::fromChunk(binning_buffer, num_rendered);
@@ -379,7 +378,6 @@ void CudaSampler::Sampler::backward(
         dL_dout_values,
         dL_dmeans,
         dL_dvalues,
-        dL_dconics,
-        dL_dsamples), debug)
+        dL_dconics), debug)
 }
 
