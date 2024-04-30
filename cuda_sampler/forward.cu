@@ -41,7 +41,7 @@ __global__ void preprocessCUDA(
 	radii[idx] = 0.0;
 	tiles_touched[idx] = 0;
 
-    const FLOAT* cov = covariances + idx * D * D;
+    const FLOAT* cov = covariances + idx * D * (D + 1) / 2;
     FLOAT my_radius = 0.0;
     uint32_t touched = 0;
 
@@ -52,10 +52,10 @@ __global__ void preprocessCUDA(
     if (D == 1) {
         my_radius = 3.0 * sqrt(cov[0]);
     } else if (D == 2) {
-        FLOAT det = (cov[0] * cov[3] - cov[1] * cov[1]);
+        FLOAT det = (cov[0] * cov[2] - cov[1] * cov[1]);
         if (det == 0.0)
             return;
-        FLOAT mid = 0.5f * (cov[0] + cov[3]);
+        FLOAT mid = 0.5f * (cov[0] + cov[2]);
         FLOAT lambda = mid + sqrt(max(1e-6, mid * mid - det));
         my_radius = 3.0 * sqrt(lambda);
     }
@@ -137,7 +137,7 @@ __global__ void renderCUDA(
 		for (int j = 0; j < min(NUM_THREADS, toDo); j++) {
             const int id = collected_id[j];
             const FLOAT* mean = means + id * D;
-            const FLOAT* con = conics + id * D * D;
+            const FLOAT* con = conics + id * D * (D + 1) / 2;
             const FLOAT* value = values + id * C;
 
             for (int s = 0; s < samples_per_thread; s++) {
@@ -166,7 +166,7 @@ __forceinline__ __device__ void gaussian(const FLOAT* X, const FLOAT* con, const
         for (int ch = 0; ch < C; ch++)
             out_values[sample_id * C + ch] += values[ch] * alpha;
     } else if (D == 2) {
-        const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+        const FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[2] * X[1] * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
         const FLOAT alpha = exp(power);
@@ -187,7 +187,7 @@ __forceinline__ __device__ void gaussian_derivative(const FLOAT* X, const FLOAT*
         }
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -211,7 +211,7 @@ __forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* 
         }
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -223,7 +223,7 @@ __forceinline__ __device__ void gaussian_laplacian(const FLOAT* X, const FLOAT* 
             out_values[(sample_id * D * D + 0) * C + ch] += values[ch] * alpha * (a1 * a1 - con[0]);
             out_values[(sample_id * D * D + 1) * C + ch] += values[ch] * alpha * (a1 * a2 - con[1]);
             out_values[(sample_id * D * D + 2) * C + ch] += values[ch] * alpha * (a1 * a2 - con[1]);
-            out_values[(sample_id * D * D + 3) * C + ch] += values[ch] * alpha * (a2 * a2 - con[3]);
+            out_values[(sample_id * D * D + 3) * C + ch] += values[ch] * alpha * (a2 * a2 - con[2]);
         }
     }
 }
@@ -240,7 +240,7 @@ __forceinline__ __device__ void gaussian_third(const FLOAT* X, const FLOAT* con,
         }
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         const FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -249,8 +249,8 @@ __forceinline__ __device__ void gaussian_third(const FLOAT* X, const FLOAT* con,
 
         const FLOAT dxxx = 3.0 * con[0] * a1 - a1 * a1 * a1;
         const FLOAT dxxy = 2.0 * con[1] * a1 - a1 * a1 * a2 + con[0] * a2;
-        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[3] * a1;
-        const FLOAT dyyy = 3.0 * con[3] * a2 - a2 * a2 * a2;
+        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[2] * a1;
+        const FLOAT dyyy = 3.0 * con[2] * a2 - a2 * a2 * a2;
 
         const FLOAT alpha = exp(power);
         for (int ch = 0; ch < C; ch++) {

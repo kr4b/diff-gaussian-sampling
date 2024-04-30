@@ -164,7 +164,7 @@ SampleGaussiansBackwardCUDAGeneric(
 
     torch::Tensor dL_dmeans = torch::zeros({P, D}, means.options());
     torch::Tensor dL_dvalues = torch::zeros({P, C}, means.options());
-    torch::Tensor dL_dconics = torch::zeros({P, D, D}, means.options());
+    torch::Tensor dL_dconics = torch::zeros({P, D * (D + 1) / 2}, means.options());
 
     if (P != 0 && N != 0) {
         const torch::Tensor min_bound = std::get<0>(samples.min(0));

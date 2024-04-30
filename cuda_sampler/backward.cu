@@ -74,7 +74,7 @@ __global__ void renderCUDA(
 		for (int j = 0; j < min(NUM_THREADS, toDo); j++) {
             const int id = collected_id[j];
             const FLOAT* mean = means + id * D;
-            const FLOAT* con = conics + id * D * D;
+            const FLOAT* con = conics + id * D * (D + 1) / 2;
             const FLOAT* value = values + id * C;
 
             for (int s = 0; s < samples_per_thread; s++) {
@@ -86,7 +86,7 @@ __global__ void renderCUDA(
 
                 for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
 
-                F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * D, sample_id, D, C);
+                F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * (D + 1) / 2, sample_id, D, C);
             }
         }
     }
@@ -118,7 +118,7 @@ __forceinline__ __device__ void gaussian(
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
     } else if (D == 2) {
-        FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[3] * X[1] * X[1]) - con[1] * X[0] * X[1];
+        FLOAT power = -0.5 * (con[0] * X[0] * X[0] + con[2] * X[1] * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
         const FLOAT G = exp(power);
@@ -132,18 +132,13 @@ __forceinline__ __device__ void gaussian(
 
         const FLOAT gdx = G * X[0];
         const FLOAT gdy = G * X[1];
-        const FLOAT dG_ddelx = gdx * con[0] + gdy * con[1];
-        const FLOAT dG_ddely = gdx * con[1] + gdy * con[3];
-        const FLOAT dL_dx = dL_dG * dG_ddelx;
-        const FLOAT dL_dy = dL_dG * dG_ddely;
 
-        atomicAdd(dL_dmeans + 0, -dL_dx);
-        atomicAdd(dL_dmeans + 1, -dL_dy);
+        atomicAdd(dL_dmeans + 0, -dL_dG * (gdx * con[0] + gdy * con[1]));
+        atomicAdd(dL_dmeans + 1, -dL_dG * (gdx * con[1] + gdy * con[2]));
 
         atomicAdd(dL_dconics + 0, -0.5 * gdx * X[0] * dL_dG);
         atomicAdd(dL_dconics + 1, -gdy * X[0] * dL_dG);
-        // atomicAdd(dL_dconics + 2, -gdx * X[1] * dL_dG);
-        atomicAdd(dL_dconics + 3, -0.5 * gdy * X[1] * dL_dG);
+        atomicAdd(dL_dconics + 2, -0.5 * gdy * X[1] * dL_dG);
     }
 }
 
@@ -171,7 +166,7 @@ __forceinline__ __device__ void gaussian_derivative(
         atomicAdd(dL_dconics + 0, (X[0] - 0.5 * X[0] * X[0] * x1) * dL_dG * G);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -192,15 +187,14 @@ __forceinline__ __device__ void gaussian_derivative(
 
         const FLOAT gx = (a1 * dL_dGx + a2 * dL_dGy);
         const FLOAT dL_dx = ((a1 * a1 - con[0]) * dL_dGx + (a1 * a2 - con[1]) * dL_dGy) * G;
-        const FLOAT dL_dy = ((a2 * a2 - con[3]) * dL_dGy + (a1 * a2 - con[1]) * dL_dGx) * G;
+        const FLOAT dL_dy = ((a2 * a2 - con[2]) * dL_dGy + (a1 * a2 - con[1]) * dL_dGx) * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
         atomicAdd(dL_dmeans + 1, -dL_dy);
 
         atomicAdd(dL_dconics + 0, (X[0] * dL_dGx - 0.5 * X[0] * X[0] * gx) * G);
         atomicAdd(dL_dconics + 1, (X[1] * dL_dGx + X[0] * dL_dGy - X[0] * X[1] * gx) * G);
-        // atomicAdd(dL_dconics + 2, (X[0] * dL_dGy + X[1] * dL_dGx - X[1] * X[0] * gx) * G);
-        atomicAdd(dL_dconics + 3, (X[1] * dL_dGy - 0.5 * X[1] * X[1] * gx) * G);
+        atomicAdd(dL_dconics + 2, (X[1] * dL_dGy - 0.5 * X[1] * X[1] * gx) * G);
     }
 }
 
@@ -232,7 +226,7 @@ __forceinline__ __device__ void gaussian_laplacian(
         atomicAdd(dL_dconics + 0, dV_dc);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -242,7 +236,7 @@ __forceinline__ __device__ void gaussian_laplacian(
 
         const FLOAT dxx = a1 * a1 - con[0];
         const FLOAT dxy = a1 * a2 - con[1];
-        const FLOAT dyy = a2 * a2 - con[3];
+        const FLOAT dyy = a2 * a2 - con[2];
 
         FLOAT dL_dGxx = 0.0;
         FLOAT dL_dGxy = 0.0;
@@ -264,11 +258,11 @@ __forceinline__ __device__ void gaussian_laplacian(
 
         const FLOAT dL_dx = ((a1 * a1 * a1 - 3.0 * con[0] * a1) * dL_dGxx
                           +  (a1 * a2 * a1 - con[1] * a1 - (con[1] * a1 + con[0] * a2)) * (dL_dGxy + dL_dGyx)
-                          +  (a2 * a2 * a1 - con[3] * a1 - 2.0 * con[1] * a2) * dL_dGyy
+                          +  (a2 * a2 * a1 - con[2] * a1 - 2.0 * con[1] * a2) * dL_dGyy
                           ) * G;
         const FLOAT dL_dy = ((a1 * a1 * a2 - con[0] * a2 - 2.0 * con[1] * a1) * dL_dGxx
-                          +  (a1 * a2 * a2 - con[1] * a2 - (con[3] * a1 + con[1] * a2)) * (dL_dGxy + dL_dGyx)
-                          +  (a2 * a2 * a2 - 3.0 * con[3] * a2) * dL_dGyy
+                          +  (a1 * a2 * a2 - con[1] * a2 - (con[2] * a1 + con[1] * a2)) * (dL_dGxy + dL_dGyx)
+                          +  (a2 * a2 * a2 - 3.0 * con[2] * a2) * dL_dGyy
                           ) * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
@@ -288,8 +282,7 @@ __forceinline__ __device__ void gaussian_laplacian(
 
         atomicAdd(dL_dconics + 0, (dVxx_dcxx * dL_dGxx + dVxy_dcxx * (dL_dGxy + dL_dGyx) + dVyy_dcxx * dL_dGyy) * G);
         atomicAdd(dL_dconics + 1, (dVxx_dcxy * dL_dGxx + dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
-        // atomicAdd(dL_dconics + 2, (dVxx_dcxy * dL_dGxx + dVxy_dcxy * (dL_dGxy + dL_dGyx) + dVyy_dcxy * dL_dGyy) * G);
-        atomicAdd(dL_dconics + 3, (dVxx_dcyy * dL_dGxx + dVxy_dcyy * (dL_dGxy + dL_dGyx) + dVyy_dcyy * dL_dGyy) * G);
+        atomicAdd(dL_dconics + 2, (dVxx_dcyy * dL_dGxx + dVxy_dcyy * (dL_dGxy + dL_dGyx) + dVyy_dcyy * dL_dGyy) * G);
     }
 }
 
@@ -324,7 +317,7 @@ __forceinline__ __device__ void gaussian_third(
         atomicAdd(dL_dconics + 0, dV_dc);
     } else if (D == 2) {
         const FLOAT x1 = con[0] * X[0];
-        const FLOAT x2 = con[3] * X[1];
+        const FLOAT x2 = con[2] * X[1];
         FLOAT power = -0.5 * (x1 * X[0] + x2 * X[1]) - con[1] * X[0] * X[1];
         if (power > 0.0) return;
 
@@ -334,8 +327,8 @@ __forceinline__ __device__ void gaussian_third(
 
         const FLOAT dxxx = 3.0 * con[0] * a1 - a1 * a1 * a1;
         const FLOAT dxxy = 2.0 * con[1] * a1 - a1 * a1 * a2 + con[0] * a2;
-        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[3] * a1;
-        const FLOAT dyyy = 3.0 * con[3] * a2 - a2 * a2 * a2;
+        const FLOAT dxyy = 2.0 * con[1] * a2 - a1 * a2 * a2 + con[2] * a1;
+        const FLOAT dyyy = 3.0 * con[2] * a2 - a2 * a2 * a2;
 
         FLOAT dL_dGxxx = 0.0;
         FLOAT dL_dGxxy = 0.0;
@@ -371,20 +364,20 @@ __forceinline__ __device__ void gaussian_third(
         }
 
         const FLOAT dxxy_dx = 2.0 * a1 * a2 * con[0] + a1 * a1 * con[1] - 3.0 * con[0] * con[1];
-        const FLOAT dxyy_dx = 2.0 * a1 * a2 * con[1] + a2 * a2 * con[0] - con[3] * con[0] - 2.0 * con[1] * con[1];
+        const FLOAT dxyy_dx = 2.0 * a1 * a2 * con[1] + a2 * a2 * con[0] - con[2] * con[0] - 2.0 * con[1] * con[1];
         const FLOAT dL_dx = ((dxxx * a1 - 3.0 * con[0] * con[0] + 3.0 * a1 * a1 * con[0]) * dL_dGxxx
                           +  (dxxy * a1 + dxxy_dx) * dL_dGxxy + (dxxy * a1 + dxxy_dx) * dL_dGxyx
                           +  (dxyy * a1 + dxyy_dx) * dL_dGxyy + (dxxy * a1 + dxxy_dx) * dL_dGyxx
                           +  (dxyy * a1 + dxyy_dx) * dL_dGyxy + (dxyy * a1 + dxyy_dx) * dL_dGyyx
-                          +  (dyyy * a1 - 3.0 * con[3] * con[1] + 3.0 * a2 * a2 * con[1]) * dL_dGyyy
+                          +  (dyyy * a1 - 3.0 * con[2] * con[1] + 3.0 * a2 * a2 * con[1]) * dL_dGyyy
                           ) * G;
-        const FLOAT dxxy_dy = 2.0 * a1 * a2 * con[1] + a1 * a1 * con[3] - con[0] * con[3] - 2.0 * con[1] * con[1];
-        const FLOAT dxyy_dy = 2.0 * a1 * a2 * con[3] + a2 * a2 * con[1] - 3.0 * con[3] * con[1];
+        const FLOAT dxxy_dy = 2.0 * a1 * a2 * con[1] + a1 * a1 * con[2] - con[0] * con[2] - 2.0 * con[1] * con[1];
+        const FLOAT dxyy_dy = 2.0 * a1 * a2 * con[2] + a2 * a2 * con[1] - 3.0 * con[2] * con[1];
         const FLOAT dL_dy = ((dxxx * a2 - 3.0 * con[0] * con[1] + 3.0 * a1 * a1 * con[1]) * dL_dGxxx
                           +  (dxxy * a2 + dxxy_dy) * dL_dGxxy + (dxxy * a2 + dxxy_dy) * dL_dGxyx
                           +  (dxyy * a2 + dxyy_dy) * dL_dGxyy + (dxxy * a2 + dxxy_dy) * dL_dGyxx
                           +  (dxyy * a2 + dxyy_dy) * dL_dGyxy + (dxyy * a2 + dxyy_dy) * dL_dGyyx
-                          +  (dyyy * a2 - 3.0 * con[3] * con[3] + 3.0 * a2 * a2 * con[3]) * dL_dGyyy
+                          +  (dyyy * a2 - 3.0 * con[2] * con[2] + 3.0 * a2 * a2 * con[2]) * dL_dGyyy
                           ) * G;
 
         atomicAdd(dL_dmeans + 0, -dL_dx);
@@ -392,23 +385,22 @@ __forceinline__ __device__ void gaussian_third(
 
         const FLOAT dVxxx_dcxx = -0.5 * dxxx * X[0] * X[0] + 3.0 * con[0] * X[0] + 3.0 * a1 - 3.0 * a1 * a1 * X[0];
         const FLOAT dVxxy_dcxx = -0.5 * dxxy * X[0] * X[0] + 2.0 * con[1] * X[0] - 2.0 * a1 * a2 * X[0] + a2;
-        const FLOAT dVxyy_dcxx = -0.5 * dxyy * X[0] * X[0] - a2 * a2 * X[0] + con[3] * X[0];
+        const FLOAT dVxyy_dcxx = -0.5 * dxyy * X[0] * X[0] - a2 * a2 * X[0] + con[2] * X[0];
         const FLOAT dVyyy_dcxx = -0.5 * dyyy * X[0] * X[0];
 
         const FLOAT dVxxx_dcxy = -dxxx * X[0] * X[1] + 3.0 * con[0] * X[1] - 3.0 * a1 * a1 * X[1];
         const FLOAT dVxxy_dcxy = -dxxy * X[0] * X[1] + 2.0 * con[1] * X[1] + 2.0 * a1 - 2.0 * a1 * a2 * X[1] - a1 * a1 * X[0] + con[0] * X[0];
-        const FLOAT dVxyy_dcxy = -dxyy * X[0] * X[1] + 2.0 * con[1] * X[0] + 2.0 * a2 - a2 * a2 * X[1] - 2.0 * a1 * a2 * X[0] + con[3] * X[1];
-        const FLOAT dVyyy_dcxy = -dyyy * X[0] * X[1] + 3.0 * con[3] * X[0] - 3.0 * a2 * a2 * X[0];
+        const FLOAT dVxyy_dcxy = -dxyy * X[0] * X[1] + 2.0 * con[1] * X[0] + 2.0 * a2 - a2 * a2 * X[1] - 2.0 * a1 * a2 * X[0] + con[2] * X[1];
+        const FLOAT dVyyy_dcxy = -dyyy * X[0] * X[1] + 3.0 * con[2] * X[0] - 3.0 * a2 * a2 * X[0];
 
         const FLOAT dVxxx_dcyy = -0.5 * dxxx * X[1] * X[1];
         const FLOAT dVxxy_dcyy = -0.5 * dxxy * X[1] * X[1] - a1 * a1 * X[1] + con[0] * X[1];
         const FLOAT dVxyy_dcyy = -0.5 * dxyy * X[1] * X[1] + 2.0 * con[1] * X[1] - 2.0 * a1 * a2 * X[1] + a1;
-        const FLOAT dVyyy_dcyy = -0.5 * dyyy * X[1] * X[1] + 3.0 * con[3] * X[1] + 3.0 * a2 - 3.0 * a2 * a2 * X[1];
+        const FLOAT dVyyy_dcyy = -0.5 * dyyy * X[1] * X[1] + 3.0 * con[2] * X[1] + 3.0 * a2 - 3.0 * a2 * a2 * X[1];
 
         atomicAdd(dL_dconics + 0, (dVxxx_dcxx * dL_dGxxx + dVxxy_dcxx * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxx * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxx * dL_dGyyy) * G);
         atomicAdd(dL_dconics + 1, (dVxxx_dcxy * dL_dGxxx + dVxxy_dcxy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxy * dL_dGyyy) * G);
-        // atomicAdd(dL_dconics + 2, (dVxxx_dcxy * dL_dGxxx + dVxxy_dcxy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcxy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcxy * dL_dGyyy) * G);
-        atomicAdd(dL_dconics + 3, (dVxxx_dcyy * dL_dGxxx + dVxxy_dcyy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcyy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcyy * dL_dGyyy) * G);
+        atomicAdd(dL_dconics + 2, (dVxxx_dcyy * dL_dGxxx + dVxxy_dcyy * (dL_dGxxy + dL_dGxyx + dL_dGyxx) + dVxyy_dcyy * (dL_dGxyy + dL_dGyxy + dL_dGyyx) + dVyyy_dcyy * dL_dGyyy) * G);
     }
 }
 
