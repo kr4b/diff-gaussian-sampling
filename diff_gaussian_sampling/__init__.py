@@ -30,8 +30,8 @@ def sample_gaussians_laplacian(debug, *args):
 def sample_gaussians_third_derivative(debug, *args):
     return _SampleGaussiansThirdDerivative.apply(debug, *args)
 
-def aggregate_neighbors(means, radii, features, distance_transforms, debug):
-    return _AggregateNeighbors.apply(means, radii, features, distance_transforms, debug)
+def aggregate_neighbors(means, conics, radii, features, frequencies, distance_transforms, debug):
+    return _AggregateNeighbors.apply(means, conics, radii, features, frequencies, distance_transforms, debug)
 
 def call_debug(func, debug, name, *args):
     if debug:
@@ -150,27 +150,40 @@ class _SampleGaussiansThirdDerivative(torch.autograd.Function):
 
 class _AggregateNeighbors(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, means, radii, features, distance_transforms, debug):
+    def forward(ctx, means, conics, radii, features, frequencies, distance_transforms, debug):
         ctx.debug = debug
+        ctx.conics = conics
+        ctx.radii = radii
         ctx.features = features
+        ctx.frequencies = frequencies
         ctx.distance_transforms = distance_transforms
-        args = (means, radii, features, distance_transforms, debug)
-        indices, dists, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+        args = (means, conics, radii, features, frequencies, distance_transforms, debug)
+        indices, dists, inv_total_densities, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+        if torch.isnan(neighbor_features.mean()):
+            for i in range(neighbor_features.shape[0]):
+                if torch.isnan(neighbor_features[i].mean()):
+                    print(i, radii[i].item(), neighbor_features[i])
+                if torch.isinf(1.0 / radii[i]):
+                    print(i, conics[i], neighbor_features[i])
         ctx.indices = indices
         ctx.dists = dists
+        ctx.inv_total_densities = inv_total_densities
         return indices, neighbor_features
 
     @staticmethod
     def backward(ctx, grad_indices, grad_out):
-        grad_features, grad_distance_transforms = call_debug(
+        grad_features, grad_frequencies, grad_distance_transforms = call_debug(
             _C.aggregate_neighbors_backward, ctx.debug, "aggregate_bw",
-            ctx.features, ctx.indices, ctx.dists, ctx.distance_transforms, grad_out, ctx.debug
+            ctx.conics, ctx.radii, ctx.features, ctx.indices, ctx.dists, ctx.inv_total_densities,
+            ctx.frequencies, ctx.distance_transforms, grad_out, ctx.debug
         )
 
         return (
             None,
             None,
+            None,
             grad_features,
+            grad_frequencies,
             grad_distance_transforms,
             None,
         )
@@ -252,5 +265,13 @@ class GaussianSampler:
             self.debug,
         )
 
-    def aggregate_neighbors(self, features, distance_transforms):
-        return aggregate_neighbors(self.means, self.radii, features, distance_transforms, self.debug)
+    def aggregate_neighbors(self, features, frequencies, distance_transforms):
+        return aggregate_neighbors(
+            self.means,
+            self.conics,
+            self.radii,
+            features,
+            frequencies,
+            distance_transforms,
+            self.debug
+        )
