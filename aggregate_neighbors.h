@@ -8,14 +8,20 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> Aggregate
     const torch::Tensor& conics,
     const torch::Tensor& radii,
     const torch::Tensor& features,
+    const torch::Tensor& transforms,
+    const torch::Tensor& queries,
+    const torch::Tensor& keys,
     const torch::Tensor& frequencies,
     const torch::Tensor& distance_transforms,
     const bool debug);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
     const torch::Tensor& conics,
     const torch::Tensor& radii,
     const torch::Tensor& features,
+    const torch::Tensor& transforms,
+    const torch::Tensor& queries,
+    const torch::Tensor& keys,
     const torch::Tensor& indices,
     const torch::Tensor& dists,
     const torch::Tensor& inv_total_densities,
