@@ -11,20 +11,10 @@ namespace cg = cooperative_groups;
 // Find all colliding Gaussians based on bounding circles approximation
 // TODO: Optimize using a tree structure
 __global__ void findCollisions(
-    const int P, const int D, const int L, const int K, const int E,
+    const int P, const int D,
     const FLOAT* means,
-    const FLOAT* conics,
     const FLOAT* radii,
-    const FLOAT* features,
-    const FLOAT* transform,
-    const FLOAT* queries,
-    const FLOAT* keys,
-    const FLOAT* frequencies,
-    const FLOAT* distance_transform,
-    bool* indices,
-    FLOAT* dists,
-    FLOAT* inv_total_densities,
-    FLOAT* neighbor_features)
+    bool* indices)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -35,31 +25,65 @@ __global__ void findCollisions(
 
     const FLOAT* my_mean = means + idx * D;
     const FLOAT my_inv_radius = 1.0 / (my_radius + 1e-6);
-    const FLOAT* my_query = queries + idx * K;
     bool* my_indices = indices + idx * P;
-    FLOAT* my_dists = dists + idx * D * P;
-    FLOAT* my_inv_total_density = inv_total_densities + idx;
-    FLOAT* my_neighbor_feature = neighbor_features + idx * L;
 
-    FLOAT total_density = 0.0;
     for (int i = 0; i < P; i++) {
+        // if (idx == i) continue;
         const FLOAT* other_mean = means + i * D;
-        const FLOAT* con = conics + i * (D * (D+1) / 2);
         const FLOAT other_radius = radii[i] * 0.333;
-        const FLOAT* other_feature = features + i * L;
-        const FLOAT* other_key = keys + i * K;
-        FLOAT* X = my_dists + i * D;
 
         if (other_radius < 1e-6) continue;
 
         FLOAT dist = 0.0;
         for (int d = 0; d < D; d++) {
-            X[d] = other_mean[d] - my_mean[d];
-            dist += X[d] * X[d];
+            const FLOAT dx = other_mean[d] - my_mean[d];
+            dist += dx * dx;
         }
 
         const FLOAT radius = my_radius + other_radius;
         if (dist > radius * radius) continue;
+        my_indices[i] = true;
+    }
+}
+
+__global__ void preprocess(
+    const int P, const int D,
+    const FLOAT* means,
+    const FLOAT* conics,
+    const FLOAT* radii,
+    const bool* bool_indices,
+    const long* ranges,
+    long* indices,
+    FLOAT* dists,
+    FLOAT* densities,
+    FLOAT* inv_total_densities)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P)
+		return;
+
+    const FLOAT* my_mean = means + idx * D;
+    const FLOAT my_radius = radii[idx] * 0.333;
+    const FLOAT my_inv_radius = 1.0 / (my_radius + 1e-6);
+    const bool* my_bool_indices = bool_indices + idx * P;
+    const long start = (idx == 0) ? 0 : ranges[idx - 1];
+    long* my_indices = indices + start;
+    FLOAT* my_dists = dists + start * D;
+    FLOAT* my_densities = densities + start;
+    FLOAT* my_inv_total_density = inv_total_densities + idx;
+
+    FLOAT total_density = 0.0;
+    int current = -1;
+    for (int i = 0; i < P; i++) {
+        if (!my_bool_indices[i]) continue;
+        current += 1;
+        const FLOAT* other_mean = means + i * D;
+        const FLOAT* con = conics + i * (D * (D+1) / 2);
+        FLOAT* X = my_dists + current * D;
+
+        for (int d = 0; d < D; d++) {
+            X[d] = other_mean[d] - my_mean[d];
+        }
 
         FLOAT power = 0.0;
         if (D == 1) {
@@ -68,11 +92,56 @@ __global__ void findCollisions(
             power = -0.5 * (con[0] * X[0] * X[0] + con[2] * X[1] * X[1]) - con[1] * X[0] * X[1];
         }
 
-        if (power > 0) continue;
-        const FLOAT density = exp(power);
-        total_density += density;
+        for (int d = 0; d < D; d++) {
+            X[d] *= my_inv_radius;
+        }
 
-        my_indices[i] = true;
+        if (power > 0) continue;
+        my_densities[current] = exp(power);
+        my_indices[current] = i;
+        total_density += my_densities[current];
+    }
+
+    const FLOAT inv_total_density = 1.0 / (total_density + 1e-6);
+    *my_inv_total_density = inv_total_density;
+}
+
+__global__ void aggregateNeighbors(
+    const int P, const int D, const int L, const int K, const int E,
+    const FLOAT* features,
+    const FLOAT* transform,
+    const FLOAT* queries,
+    const FLOAT* keys,
+    const FLOAT* frequencies,
+    const FLOAT* distance_transform,
+    const long* indices,
+    const long* ranges,
+    const FLOAT* dists,
+    const FLOAT* densities,
+    const FLOAT* inv_total_densities,
+    FLOAT* neighbor_features)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P)
+		return;
+
+    const FLOAT* my_query = queries + idx * K;
+    const long my_range = ranges[idx];
+    const long start = (idx == 0) ? 0 : ranges[idx - 1];
+    const long* my_indices = indices + start;
+    const FLOAT* my_dists = dists + start * D;
+    const FLOAT* my_densities = densities + start;
+    const FLOAT my_inv_total_density = inv_total_densities[idx];
+    FLOAT* my_neighbor_feature = neighbor_features + idx * L;
+
+    FLOAT total_density = 0.0;
+    for (long i = 0; i < my_range - start; i++) {
+        const long index = my_indices[i];
+        if (index == -1) continue;
+        const FLOAT* other_feature = features + index * L;
+        const FLOAT* other_key = keys + index * K;
+        const FLOAT* X = my_dists + i * D;
+        const FLOAT density = my_densities[i];
 
         FLOAT weight = 0.0;
         for (int k = 0; k < K; k++) {
@@ -84,42 +153,36 @@ __global__ void findCollisions(
             FLOAT factor = 0.0;
             for (int d = 0; d < D; d++) {
                 for (int e = 0; e < (E-1)/D/2; e++) {
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d] * my_inv_radius);
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d] * my_inv_radius);
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d] * my_inv_radius);
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d] * my_inv_radius);
+                    embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d]);
+                    embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d]);
+                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d]);
+                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d]);
                 }
             }
 
             embedding += distance_transform[E - 1];
             factor += distance_transform[2*E - 1];
 
-            const FLOAT embedded = density * weight * (embedding + factor * other_feature[j]);
+            const FLOAT embedded = my_inv_total_density * density * weight * (embedding + factor * other_feature[j]);
             for (int k = 0; k < L; k++) {
                 my_neighbor_feature[k] += transform[j * L + k] * embedded;
             }
         }
     }
-
-    const FLOAT inv_total_density = 1.0 / (total_density + 1e-6);
-    *my_inv_total_density = inv_total_density;
-    for (int j = 0; j < L; j++) {
-        my_neighbor_feature[j] *= inv_total_density;
-    }
 }
 
-__global__ void findCollisionsBackward(
+__global__ void aggregateNeighborsBackward(
     const int P, const int D, const int L, const int K, const int E,
-    const FLOAT* conics,
-    const FLOAT* radii,
     const FLOAT* features,
     const FLOAT* transform,
     const FLOAT* queries,
     const FLOAT* keys,
     const FLOAT* frequencies,
     const FLOAT* distance_transform,
-    const bool* indices,
+    const long* indices,
+    const long* ranges,
     const FLOAT* dists,
+    const FLOAT* densities,
     const FLOAT* inv_total_densities,
     const FLOAT* dL_dneighbor_features,
     FLOAT* dL_dfeatures,
@@ -133,13 +196,12 @@ __global__ void findCollisionsBackward(
 	if (idx >= P)
 		return;
 
-    const FLOAT my_radius = radii[idx] * 0.333;
-    if (my_radius < 1e-6) return;
-
-    const FLOAT my_inv_radius = 1.0 / (my_radius + 1e-6);
     const FLOAT* my_query = queries + idx * K;
-    const bool* my_indices = indices + idx * P;
-    const FLOAT* my_dists = dists + idx * D * P;
+    const long my_range = ranges[idx];
+    const long start = (idx == 0) ? 0 : ranges[idx - 1];
+    const long* my_indices = indices + start;
+    const FLOAT* my_dists = dists + start * D;
+    const FLOAT* my_densities = densities + start;
     const FLOAT my_inv_total_density = inv_total_densities[idx];
     const FLOAT* my_dL = dL_dneighbor_features + idx * L;
     FLOAT* my_dL_dqueries = dL_dqueries + idx * K;
@@ -156,25 +218,15 @@ __global__ void findCollisionsBackward(
         }
     }
 
-    for (int i = 0; i < P; i++) {
-        if (!my_indices[i]) continue;
-
-        const FLOAT* con = conics + i * (D * (D+1) / 2);
+    for (long i = 0; i < my_range - start; i++) {
+        const long index = my_indices[i];
+        if (index == -1) continue;
+        const FLOAT* other_feature = features + index * L;
+        const FLOAT* other_key = keys + index * K;
         const FLOAT* X = my_dists + i * D;
-        const FLOAT* other_feature = features + i * L;
-        const FLOAT* other_key = keys + i * K;
-        FLOAT* other_dL_dfeatures = dL_dfeatures + i * L;
-        FLOAT* other_dL_dkeys = dL_dkeys + i * K;
-
-        FLOAT power = 0.0;
-        if (D == 1) {
-            power = -0.5 * con[0] * X[0] * X[0];
-        } else if (D == 2) {
-            power = -0.5 * (con[0] * X[0] * X[0] + con[2] * X[1] * X[1]) - con[1] * X[0] * X[1];
-        }
-
-        if (power > 0) continue;
-        const FLOAT density = exp(power);
+        const FLOAT density = my_densities[i];
+        FLOAT* other_dL_dfeatures = dL_dfeatures + index * L;
+        FLOAT* other_dL_dkeys = dL_dkeys + index * K;
 
         FLOAT weight = 0.0;
         for (int k = 0; k < K; k++) {
@@ -189,20 +241,20 @@ __global__ void findCollisionsBackward(
             FLOAT factor = 0.0;
             for (int d = 0; d < D; d++) {
                 for (int e = 0; e < (E-1)/D/2; e++) {
-                    const FLOAT s = sin(frequencies[e] * M_PI * X[d] * my_inv_radius);
-                    const FLOAT c = cos(frequencies[e] * M_PI * X[d] * my_inv_radius);
+                    const FLOAT s = sin(frequencies[e] * M_PI * X[d]);
+                    const FLOAT c = cos(frequencies[e] * M_PI * X[d]);
 
                     embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * s;
                     factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * s;
                     atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 0, dcf * s);
                     atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 0, dcf * s * other_feature[j]);
-                    atomicAdd(dL_dfrequencies + e, c * M_PI * X[d] * my_inv_radius * dcf * (distance_transform[d*((E-1)/D) + e*2 + 0] + distance_transform[E + d*((E-1)/D) + e*2 + 0] * other_feature[j]));
+                    atomicAdd(dL_dfrequencies + e, c * M_PI * X[d] * dcf * (distance_transform[d*((E-1)/D) + e*2 + 0] + distance_transform[E + d*((E-1)/D) + e*2 + 0] * other_feature[j]));
 
                     embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * c;
                     factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * c;
                     atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 1, dcf * c);
                     atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 1, dcf * c * other_feature[j]);
-                    atomicAdd(dL_dfrequencies + e, -s * M_PI * X[d] * my_inv_radius * dcf * (distance_transform[d*((E-1)/D) + e*2 + 1] + distance_transform[E + d*((E-1)/D) + e*2 + 1] * other_feature[j]));
+                    atomicAdd(dL_dfrequencies + e, -s * M_PI * X[d] * dcf * (distance_transform[d*((E-1)/D) + e*2 + 1] + distance_transform[E + d*((E-1)/D) + e*2 + 1] * other_feature[j]));
                 }
             }
 
@@ -226,63 +278,106 @@ __global__ void findCollisionsBackward(
     delete summed_transform;
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsCUDA(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsPreprocessCUDA(
     const torch::Tensor& means,
     const torch::Tensor& conics,
     const torch::Tensor& radii,
+    const bool debug)
+{
+    const int P = means.size(0);
+    const int D = means.size(-1);
+
+    torch::Tensor bool_indices = torch::full({P, P}, false, means.options().dtype(torch::kBool));
+    // torch::Tensor bounding_boxes = torch::full({P, D*2}, 0, means.options());
+
+	findCollisions <<< (P + 255) / 256, 256 >>> (
+		P, D,
+        means.contiguous().data<FLOAT>(),
+        radii.contiguous().data<FLOAT>(),
+        bool_indices.contiguous().data<bool>()
+    )
+    CHECK_CUDA(, debug)
+
+    const torch::Tensor counts = bool_indices.sum(-1);
+    const torch::Tensor ranges = counts.cumsum(0);
+    const int length = ranges[-1].item<int>();
+
+    torch::Tensor indices = torch::full({length}, -1, means.options().dtype(torch::kLong));
+    torch::Tensor dists = torch::full({length, D}, 0, means.options());
+    torch::Tensor densities = torch::full({length}, 0, means.options());
+    torch::Tensor inv_total_densities = torch::full({P}, 0, means.options());
+
+    preprocess <<< (P + 255) / 256, 256 >>> (
+        P, D,
+        means.contiguous().data<FLOAT>(),
+        conics.contiguous().data<FLOAT>(),
+        radii.contiguous().data<FLOAT>(),
+        bool_indices.contiguous().data<bool>(),
+        ranges.contiguous().data<long>(),
+        indices.contiguous().data<long>(),
+        dists.contiguous().data<FLOAT>(),
+        densities.contiguous().data<FLOAT>(),
+        inv_total_densities.contiguous().data<FLOAT>()
+    )
+    CHECK_CUDA(, debug)
+
+    return std::make_tuple(indices, ranges, dists, densities, inv_total_densities);
+}
+
+torch::Tensor AggregateNeighborsCUDA(
     const torch::Tensor& features,
     const torch::Tensor& transform,
     const torch::Tensor& queries,
     const torch::Tensor& keys,
     const torch::Tensor& frequencies,
     const torch::Tensor& distance_transform,
+    const torch::Tensor& indices,
+    const torch::Tensor& ranges,
+    const torch::Tensor& dists,
+    const torch::Tensor& densities,
+    const torch::Tensor& inv_total_densities,
     const bool debug)
 {
-    const int P = means.size(0);
-    const int D = means.size(-1);
+    const int P = features.size(0);
+    const int D = dists.size(-1);
     const int L = features.size(-1);
     const int K = queries.size(-1);
     const int E = distance_transform.size(-1)/2;
 
-    torch::Tensor indices = torch::full({P, P}, false, means.options().dtype(torch::kBool));
-    torch::Tensor neighbor_features = torch::full({P, L}, 0, means.options());
-    torch::Tensor dists = torch::full({P, P, D}, 0, means.options());
-    torch::Tensor inv_total_densities = torch::full({P}, 0, means.options());
-    // torch::Tensor bounding_boxes = torch::full({P, D*2}, 0, means.options());
+    torch::Tensor neighbor_features = torch::full({P, L}, 0, features.options());
 
-	findCollisions << <(P + 255) / 256, 256 >> > (
+	aggregateNeighbors <<< (P + 255) / 256, 256 >>> (
 		P, D, L, K, E,
-        means.contiguous().data<FLOAT>(),
-        conics.contiguous().data<FLOAT>(),
-        radii.contiguous().data<FLOAT>(),
         features.contiguous().data<FLOAT>(),
         transform.contiguous().data<FLOAT>(),
         queries.contiguous().data<FLOAT>(),
         keys.contiguous().data<FLOAT>(),
         frequencies.contiguous().data<FLOAT>(),
         distance_transform.contiguous().data<FLOAT>(),
-        indices.contiguous().data<bool>(),
+        indices.contiguous().data<long>(),
+        ranges.contiguous().data<long>(),
         dists.contiguous().data<FLOAT>(),
+        densities.contiguous().data<FLOAT>(),
         inv_total_densities.contiguous().data<FLOAT>(),
         neighbor_features.contiguous().data<FLOAT>()
     )
     CHECK_CUDA(, debug)
 
-    return std::make_tuple(indices, dists, inv_total_densities, neighbor_features);
+    return neighbor_features;
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
-    const torch::Tensor& conics,
-    const torch::Tensor& radii,
     const torch::Tensor& features,
     const torch::Tensor& transform,
     const torch::Tensor& queries,
     const torch::Tensor& keys,
-    const torch::Tensor& indices,
-    const torch::Tensor& dists,
-    const torch::Tensor& inv_total_densities,
     const torch::Tensor& frequencies,
     const torch::Tensor& distance_transform,
+    const torch::Tensor& indices,
+    const torch::Tensor& ranges,
+    const torch::Tensor& dists,
+    const torch::Tensor& densities,
+    const torch::Tensor& inv_total_densities,
     const torch::Tensor& dL_dneighbor_features,
     const bool debug)
 {
@@ -299,18 +394,18 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     torch::Tensor dL_dfrequencies = torch::full(frequencies.sizes(), 0, features.options());
     torch::Tensor dL_ddistance_transform = torch::full(distance_transform.sizes(), 0, features.options());
 
-	findCollisionsBackward << <(P + 255) / 256, 256 >> > (
+	aggregateNeighborsBackward <<< (P + 255) / 256, 256 >>> (
 		P, D, L, K, E,
-        conics.contiguous().data<FLOAT>(),
-        radii.contiguous().data<FLOAT>(),
         features.contiguous().data<FLOAT>(),
         transform.contiguous().data<FLOAT>(),
         queries.contiguous().data<FLOAT>(),
         keys.contiguous().data<FLOAT>(),
         frequencies.contiguous().data<FLOAT>(),
         distance_transform.contiguous().data<FLOAT>(),
-        indices.contiguous().data<bool>(),
+        indices.contiguous().data<long>(),
+        ranges.contiguous().data<long>(),
         dists.contiguous().data<FLOAT>(),
+        densities.contiguous().data<FLOAT>(),
         inv_total_densities.contiguous().data<FLOAT>(),
         dL_dneighbor_features.contiguous().data<FLOAT>(),
         dL_dfeatures.contiguous().data<FLOAT>(),
