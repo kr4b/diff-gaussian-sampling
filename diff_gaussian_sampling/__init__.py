@@ -180,11 +180,16 @@ class _AggregateNeighbors(torch.autograd.Function):
         ctx.debug = debug
         args = (features, transform, queries, keys, frequencies, distance_transform,
                 indices, ranges, dists, densities, inv_total_densities, debug)
-        neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+        weights, embeddings, factors, neighbor_features = call_debug(_C.aggregate_neighbors, debug, "aggregate", *args)
+
         if torch.isnan(neighbor_features.mean()):
             for i in range(neighbor_features.shape[0]):
                 if torch.isnan(neighbor_features[i].mean()):
                     print(i, conics[i], neighbor_features[i])
+
+        ctx.weights = weights
+        ctx.embeddings = embeddings
+        ctx.factors = factors
         return neighbor_features
 
     @staticmethod
@@ -192,7 +197,8 @@ class _AggregateNeighbors(torch.autograd.Function):
         grad_features, grad_transform, grad_queries, grad_keys, grad_frequencies, grad_distance_transform = call_debug(
             _C.aggregate_neighbors_backward, ctx.debug, "aggregate_bw",
             ctx.features, ctx.transform, ctx.queries, ctx.keys, ctx.frequencies, ctx.distance_transform,
-            ctx.indices, ctx.ranges, ctx.dists, ctx.densities, ctx.inv_total_densities, grad_out, ctx.debug
+            ctx.indices, ctx.ranges, ctx.dists, ctx.densities, ctx.weights, ctx.embeddings, ctx.factors,
+            ctx.inv_total_densities, grad_out, ctx.debug
         )
 
         return (

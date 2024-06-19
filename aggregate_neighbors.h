@@ -9,7 +9,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     const torch::Tensor& radii,
     const bool debug);
 
-torch::Tensor AggregateNeighborsCUDA(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsCUDA(
     const torch::Tensor& features,
     const torch::Tensor& transform,
     const torch::Tensor& queries,
@@ -34,6 +34,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     const torch::Tensor& ranges,
     const torch::Tensor& dists,
     const torch::Tensor& densities,
+    const torch::Tensor& weights,
+    const torch::Tensor& embeddings,
+    const torch::Tensor& factors,
     const torch::Tensor& inv_total_densities,
     const torch::Tensor& dL_dneighbor_features,
     const bool debug);

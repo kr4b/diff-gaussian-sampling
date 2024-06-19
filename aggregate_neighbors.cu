@@ -97,6 +97,7 @@ __global__ void preprocess(
         }
 
         if (power > 0) continue;
+
         my_densities[current] = exp(power);
         my_indices[current] = i;
         total_density += my_densities[current];
@@ -119,6 +120,9 @@ __global__ void aggregateNeighbors(
     const FLOAT* dists,
     const FLOAT* densities,
     const FLOAT* inv_total_densities,
+    FLOAT* weights,
+    FLOAT* embeddings,
+    FLOAT* factors,
     FLOAT* neighbor_features)
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -132,6 +136,9 @@ __global__ void aggregateNeighbors(
     const FLOAT* my_dists = dists + start * D;
     const FLOAT* my_densities = densities + start;
     const FLOAT my_inv_total_density = inv_total_densities[idx];
+    FLOAT* my_weights = weights + start;
+    FLOAT* my_embeddings = embeddings + start;
+    FLOAT* my_factors = factors + start;
     FLOAT* my_neighbor_feature = neighbor_features + idx * L;
 
     FLOAT total_density = 0.0;
@@ -142,28 +149,38 @@ __global__ void aggregateNeighbors(
         const FLOAT* other_key = keys + index * K;
         const FLOAT* X = my_dists + i * D;
         const FLOAT density = my_densities[i];
-
         FLOAT weight = 0.0;
+
         for (int k = 0; k < K; k++) {
             weight += my_query[k] * other_key[k];
         }
+        my_weights[i] = weight;
 
-        for (int j = 0; j < L; j++) {
-            FLOAT embedding = 0.0;
-            FLOAT factor = 0.0;
-            for (int d = 0; d < D; d++) {
-                for (int e = 0; e < (E-1)/D/2; e++) {
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d]);
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d]);
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * sin(frequencies[e] * M_PI * X[d]);
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * cos(frequencies[e] * M_PI * X[d]);
-                }
+        FLOAT embedding = 0.0;
+        FLOAT factor = 0.0;
+        for (int d = 0; d < D; d++) {
+            for (int e = 0; e < (E-1)/D/2; e++) {
+                const FLOAT s = sin(frequencies[e] * M_PI * X[d]);
+                const FLOAT c = cos(frequencies[e] * M_PI * X[d]);
+
+                embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * s;
+                embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * c;
+                factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * s;
+                factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * c;
             }
+        }
 
-            embedding += distance_transform[E - 1];
-            factor += distance_transform[2*E - 1];
+        embedding += distance_transform[E - 1];
+        factor += distance_transform[2*E - 1];
 
-            const FLOAT embedded = my_inv_total_density * density * weight * (embedding + factor * other_feature[j]);
+        my_embeddings[i] = embedding;
+        my_factors[i] = factor;
+
+        const FLOAT dw = my_inv_total_density * density * weight;
+        const FLOAT dwf = dw * factor;
+        const FLOAT dwe = dw * embedding;
+        for (int j = 0; j < L; j++) {
+            const FLOAT embedded = dwe + dwf * other_feature[j];
             for (int k = 0; k < L; k++) {
                 my_neighbor_feature[k] += transform[j * L + k] * embedded;
             }
@@ -183,6 +200,9 @@ __global__ void aggregateNeighborsBackward(
     const long* ranges,
     const FLOAT* dists,
     const FLOAT* densities,
+    const FLOAT* weights,
+    const FLOAT* embeddings,
+    const FLOAT* factors,
     const FLOAT* inv_total_densities,
     const FLOAT* dL_dneighbor_features,
     FLOAT* dL_dfeatures,
@@ -202,6 +222,9 @@ __global__ void aggregateNeighborsBackward(
     const long* my_indices = indices + start;
     const FLOAT* my_dists = dists + start * D;
     const FLOAT* my_densities = densities + start;
+    const FLOAT* my_weights = weights + start;
+    const FLOAT* my_embeddings = embeddings + start;
+    const FLOAT* my_factors = factors + start;
     const FLOAT my_inv_total_density = inv_total_densities[idx];
     const FLOAT* my_dL = dL_dneighbor_features + idx * L;
     FLOAT* my_dL_dqueries = dL_dqueries + idx * K;
@@ -210,9 +233,6 @@ __global__ void aggregateNeighborsBackward(
 
     for (int j = 0; j < L; j++) {
         summed_transform[j] = 0.0;
-    }
-
-    for (int j = 0; j < L; j++) {
         for (int k = 0; k < L; k++) {
             summed_transform[j] += transform[j * L + k] * my_dL[k];
         }
@@ -225,52 +245,55 @@ __global__ void aggregateNeighborsBackward(
         const FLOAT* other_key = keys + index * K;
         const FLOAT* X = my_dists + i * D;
         const FLOAT density = my_densities[i];
+        const FLOAT weight = my_weights[i];
+        const FLOAT embedding = my_embeddings[i];
+        const FLOAT factor = my_factors[i];
         FLOAT* other_dL_dfeatures = dL_dfeatures + index * L;
         FLOAT* other_dL_dkeys = dL_dkeys + index * K;
 
-        FLOAT weight = 0.0;
-        for (int k = 0; k < K; k++) {
-            weight += my_query[k] * other_key[k];
-        }
+        const FLOAT dc = density * my_inv_total_density;
+        const FLOAT dcw = dc * weight;
 
-        for (int j = 0; j < L; j++) {
-            const FLOAT dc = density * my_inv_total_density;
-            const FLOAT dcf = dc * weight * summed_transform[j];
+        for (int d = 0; d < D; d++) {
+            for (int e = 0; e < (E-1)/D/2; e++) {
+                const FLOAT s = sin(frequencies[e] * M_PI * X[d]);
+                const FLOAT c = cos(frequencies[e] * M_PI * X[d]);
 
-            FLOAT embedding = 0.0;
-            FLOAT factor = 0.0;
-            for (int d = 0; d < D; d++) {
-                for (int e = 0; e < (E-1)/D/2; e++) {
-                    const FLOAT s = sin(frequencies[e] * M_PI * X[d]);
-                    const FLOAT c = cos(frequencies[e] * M_PI * X[d]);
+                for (int j = 0; j < L; j++) {
+                    const FLOAT dct = dcw * summed_transform[j];
 
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 0] * s;
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 0] * s;
-                    atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 0, dcf * s);
-                    atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 0, dcf * s * other_feature[j]);
-                    atomicAdd(dL_dfrequencies + e, c * M_PI * X[d] * dcf * (distance_transform[d*((E-1)/D) + e*2 + 0] + distance_transform[E + d*((E-1)/D) + e*2 + 0] * other_feature[j]));
+                    atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 0, dct * s);
+                    atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 0, dct * s * other_feature[j]);
+                    atomicAdd(dL_dfrequencies + e, c * M_PI * X[d] * dct * (distance_transform[d*((E-1)/D) + e*2 + 0] + distance_transform[E + d*((E-1)/D) + e*2 + 0] * other_feature[j]));
 
-                    embedding += distance_transform[d*((E-1)/D) + e*2 + 1] * c;
-                    factor += distance_transform[E + d*((E-1)/D) + e*2 + 1] * c;
-                    atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 1, dcf * c);
-                    atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 1, dcf * c * other_feature[j]);
-                    atomicAdd(dL_dfrequencies + e, -s * M_PI * X[d] * dcf * (distance_transform[d*((E-1)/D) + e*2 + 1] + distance_transform[E + d*((E-1)/D) + e*2 + 1] * other_feature[j]));
+                    atomicAdd(dL_ddt + d*((E-1)/D) + e*2 + 1, dct * c);
+                    atomicAdd(dL_ddt + E + d*((E-1)/D) + e*2 + 1, dct * c * other_feature[j]);
+                    atomicAdd(dL_dfrequencies + e, -s * M_PI * X[d] * dct * (distance_transform[d*((E-1)/D) + e*2 + 1] + distance_transform[E + d*((E-1)/D) + e*2 + 1] * other_feature[j]));
                 }
             }
+        }
 
-            embedding += distance_transform[E - 1];
-            factor += distance_transform[E + E - 1];
-            atomicAdd(dL_ddt + E - 1, dcf);
-            atomicAdd(dL_ddt + 2*E - 1, dcf * other_feature[j]);
-            atomicAdd(other_dL_dfeatures + j, dcf * factor);
+        const FLOAT dce = dc * embedding;
+        const FLOAT dcf = dc * factor;
 
-            const FLOAT embedded = dc * (embedding + factor * other_feature[j]);
+        for (int j = 0; j < L; j++) {
+            const FLOAT dct = dcw * summed_transform[j];
+
+            atomicAdd(dL_ddt + E - 1, dct);
+            atomicAdd(dL_ddt + 2*E - 1, dct * other_feature[j]);
+            atomicAdd(other_dL_dfeatures + j, dct * factor);
+
+            const FLOAT embedded = dce + dcf * other_feature[j];
+
+            const FLOAT we = weight * embedded;
             for (int k = 0; k < L; k++) {
-                atomicAdd(dL_dtransform + j * L + k, weight * embedded * my_dL[k]);
+                atomicAdd(dL_dtransform + j * L + k, we * my_dL[k]);
             }
+
+            const FLOAT te = summed_transform[j] * embedded;
             for (int k = 0; k < K; k++) {
-                atomicAdd(my_dL_dqueries + k, other_key[k] * summed_transform[j] * embedded);
-                atomicAdd(other_dL_dkeys + k, my_query[k] * summed_transform[j] * embedded);
+                atomicAdd(my_dL_dqueries + k, other_key[k] * te);
+                atomicAdd(other_dL_dkeys + k, my_query[k] * te);
             }
         }
     }
@@ -324,7 +347,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     return std::make_tuple(indices, ranges, dists, densities, inv_total_densities);
 }
 
-torch::Tensor AggregateNeighborsCUDA(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsCUDA(
     const torch::Tensor& features,
     const torch::Tensor& transform,
     const torch::Tensor& queries,
@@ -344,6 +367,9 @@ torch::Tensor AggregateNeighborsCUDA(
     const int K = queries.size(-1);
     const int E = distance_transform.size(-1)/2;
 
+    torch::Tensor weights = torch::full(densities.sizes(), 0, features.options());
+    torch::Tensor embeddings = torch::full(densities.sizes(), 0, features.options());
+    torch::Tensor factors = torch::full(densities.sizes(), 0, features.options());
     torch::Tensor neighbor_features = torch::full({P, L}, 0, features.options());
 
 	aggregateNeighbors <<< (P + 255) / 256, 256 >>> (
@@ -359,11 +385,14 @@ torch::Tensor AggregateNeighborsCUDA(
         dists.contiguous().data<FLOAT>(),
         densities.contiguous().data<FLOAT>(),
         inv_total_densities.contiguous().data<FLOAT>(),
+        weights.contiguous().data<FLOAT>(),
+        embeddings.contiguous().data<FLOAT>(),
+        factors.contiguous().data<FLOAT>(),
         neighbor_features.contiguous().data<FLOAT>()
     )
     CHECK_CUDA(, debug)
 
-    return neighbor_features;
+    return std::make_tuple(weights, embeddings, factors, neighbor_features);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> AggregateNeighborsBackwardCUDA(
@@ -377,6 +406,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     const torch::Tensor& ranges,
     const torch::Tensor& dists,
     const torch::Tensor& densities,
+    const torch::Tensor& weights,
+    const torch::Tensor& embeddings,
+    const torch::Tensor& factors,
     const torch::Tensor& inv_total_densities,
     const torch::Tensor& dL_dneighbor_features,
     const bool debug)
@@ -406,6 +438,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
         ranges.contiguous().data<long>(),
         dists.contiguous().data<FLOAT>(),
         densities.contiguous().data<FLOAT>(),
+        weights.contiguous().data<FLOAT>(),
+        embeddings.contiguous().data<FLOAT>(),
+        factors.contiguous().data<FLOAT>(),
         inv_total_densities.contiguous().data<FLOAT>(),
         dL_dneighbor_features.contiguous().data<FLOAT>(),
         dL_dfeatures.contiguous().data<FLOAT>(),
