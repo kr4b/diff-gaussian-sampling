@@ -18,10 +18,15 @@
 #include "config.h"
 #include "stdio.h"
 
-__forceinline__ __device__ void getRect(int D, const FLOAT* p, FLOAT max_radius, uint* rect_min, uint* rect_max, const int* grid, const FLOAT* grid_offset) {
+__forceinline__ __device__ void getRect(int D, const FLOAT* p, FLOAT max_radius, int* rect_min, int* rect_max, const int* grid, const FLOAT* grid_offset) {
 	for (size_t i = 0; i < D; i++) {
+#ifdef TORUS
+		rect_min[i] = (int)floor((p[i] - grid_offset[i] - max_radius) / BLOCK_SIZE);
+		rect_max[i] = (int)ceil((p[i] - grid_offset[i] + max_radius) / BLOCK_SIZE);
+#else
 		rect_min[i] = (uint)min(grid[i], max((int)0, (int)((p[i] - grid_offset[i] - max_radius) / BLOCK_SIZE)));
 		rect_max[i] = (uint)min(grid[i], max((int)0, (int)ceil((p[i] - grid_offset[i] + max_radius) / BLOCK_SIZE)));
+#endif
 	}
 }
 

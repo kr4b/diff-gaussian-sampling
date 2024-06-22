@@ -20,7 +20,7 @@ __global__ void findCollisions(
 	if (idx >= P)
 		return;
 
-    const FLOAT my_radius = radii[idx] * 0.333;
+    const FLOAT my_radius = radii[idx] * 0.2;
     if (my_radius < 1e-6) return;
 
     const FLOAT* my_mean = means + idx * D;
@@ -30,13 +30,16 @@ __global__ void findCollisions(
     for (int i = 0; i < P; i++) {
         // if (idx == i) continue;
         const FLOAT* other_mean = means + i * D;
-        const FLOAT other_radius = radii[i] * 0.333;
+        const FLOAT other_radius = radii[i] * 0.2;
 
         if (other_radius < 1e-6) continue;
 
         FLOAT dist = 0.0;
         for (int d = 0; d < D; d++) {
-            const FLOAT dx = other_mean[d] - my_mean[d];
+            FLOAT dx = other_mean[d] - my_mean[d];
+#ifdef TORUS
+            dx = min(dx, abs(2.0 - fmod(abs(dx), 2.0)));
+#endif
             dist += dx * dx;
         }
 
@@ -83,6 +86,17 @@ __global__ void preprocess(
 
         for (int d = 0; d < D; d++) {
             X[d] = other_mean[d] - my_mean[d];
+#ifdef TORUS
+            if (abs(X[d]) > 1.0) {
+                if (X[d] >= 0) {
+                    X[d] = fmod(X[d], 2.0) - 2.0;
+                } else {
+                    X[d] = fmod(X[d], 2.0) + 2.0;
+                }
+            } else {
+                X[d] = X[d];
+            }
+#endif
         }
 
         FLOAT power = 0.0;

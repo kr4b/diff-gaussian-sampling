@@ -30,6 +30,7 @@
 namespace cg = cooperative_groups;
 
 #include "auxiliary.h"
+#include "config.h"
 #include "forward.h"
 #include "backward.h"
 
@@ -68,8 +69,8 @@ __global__ void duplicateWithKeys(
     if (radii[idx] > 0.0f) {
         // Find this Gaussian's offset in buffer for writing keys/values.
         uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
-        uint* rect_min = new uint[D];
-        uint* rect_max = new uint[D];
+        int* rect_min = new int[D];
+        int* rect_max = new int[D];
 
         getRect(D, means + idx * D, radii[idx], rect_min, rect_max, grid, grid_offset);
 
@@ -79,8 +80,16 @@ __global__ void duplicateWithKeys(
         // with this key yields Gaussian IDs in a list, such that they
         // are sorted by tile.
         if (D == 1) {
+            if (rect_max[0] - rect_min[0] >= grid[0]) {
+                rect_min[0] = 0;
+                rect_max[0] = grid[0];
+            }
             for (int x = rect_min[0]; x < rect_max[0]; x++) {
+#ifdef TORUS
+                uint64_t key = x < 0 ? (grid[0] + (x % grid[0])) : (x % grid[0]);
+#else
                 uint64_t key = x;
+#endif
                 key <<= 32;
                 key |= (uint32_t) idx;
                 gaussian_keys_unsorted[off] = key;
@@ -88,9 +97,23 @@ __global__ void duplicateWithKeys(
                 off++;
             }
         } else if (D == 2) {
+            if (rect_max[0] - rect_min[0] >= grid[0]) {
+                rect_min[0] = 0;
+                rect_max[0] = grid[0];
+            }
+            if (rect_max[1] - rect_min[1] >= grid[1]) {
+                rect_min[1] = 0;
+                rect_max[1] = grid[1];
+            }
             for (int y = rect_min[1]; y < rect_max[1]; y++) {
                 for (int x = rect_min[0]; x < rect_max[0]; x++) {
+#ifdef TORUS
+                    int ty = y < 0 ? (grid[1] + (y % grid[1])) : (y % grid[1]);
+                    int tx = x < 0 ? (grid[0] + (x % grid[0])) : (x % grid[0]);
+                    uint64_t key = ty * grid[0] + tx;
+#else
                     uint64_t key = y * grid[0] + x;
+#endif
                     key <<= 32;
                     key |= (uint32_t) idx;
                     gaussian_keys_unsorted[off] = key;
@@ -283,10 +306,10 @@ int CudaSampler::Sampler::preprocess(
         grid_offset)
     CHECK_CUDA(, debug)
 
-    // uint64_t* keys = new uint64_t[N];
-    // cudaMemcpy(keys, sample_binning_state.point_list_keys_unsorted, N, cudaMemcpyDeviceToHost);
-    // for (int i = 0; i < N; i++) {
-    //     std::cout << (keys[i] >> 32) << std::endl;
+    // uint2* keys = new uint2[blocks];
+    // cudaMemcpy(keys, ranges, num_rendered * sizeof(uint2), cudaMemcpyDeviceToHost);
+    // for (int i = 0; i < blocks; i++) {
+    //     std::cout << keys[i].x << ", " << keys[i].y << std::endl;
     // }
 
     // Sort complete list of samples indices by keys

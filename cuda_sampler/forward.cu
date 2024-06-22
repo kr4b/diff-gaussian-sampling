@@ -60,15 +60,15 @@ __global__ void preprocessCUDA(
         my_radius = 3.0 * sqrt(lambda);
     }
 
-    uint* rect_min = new uint[D];
-    uint* rect_max = new uint[D];
+    int* rect_min = new int[D];
+    int* rect_max = new int[D];
 
     getRect(D, means + idx * D, my_radius, rect_min, rect_max, grid, grid_offset);
 
     if (D == 1) {
-        touched = rect_max[0] - rect_min[0];
+        touched = min(rect_max[0] - rect_min[0], grid[0]);
     } else if (D == 2) {
-        touched = (rect_max[1] - rect_min[1]) * (rect_max[0] - rect_min[0]);
+        touched = min(rect_max[1] - rect_min[1], grid[1]) * min(rect_max[0] - rect_min[0], grid[0]);
     }
 
     delete rect_min;
@@ -84,9 +84,6 @@ __global__ void preprocessCUDA(
 
 typedef void(*gaussian_func)(const FLOAT*, const FLOAT*, const FLOAT*, FLOAT*, int, int, int);
 
-// Main rasterization method. Collaboratively works on one tile per
-// block, each thread treats one pixel. Alternates between fetching 
-// and rasterizing data.
 template <gaussian_func F>
 __global__ void renderCUDA(
     const int D, const int C,
@@ -147,7 +144,18 @@ __global__ void renderCUDA(
                 const int sample_id = sample_point_list[sample_range.x + sample_offset + s];
                 const FLOAT* sample = samples + sample_id * D;
 
-                for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
+                for (int k = 0; k < D; k++) {
+                    X[k] = mean[k] - sample[k];
+#ifdef TORUS
+                    if (abs(X[k]) > 1.0) {
+                        if (X[k] >= 0) {
+                            X[k] = fmod(X[k], 2.0) - 2.0;
+                        } else {
+                            X[k] = fmod(X[k], 2.0) + 2.0;
+                        }
+                    }
+#endif
+                }
 
                 F(X, con, value, out_values, sample_id, D, C);
             }

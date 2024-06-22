@@ -84,7 +84,18 @@ __global__ void renderCUDA(
                 const int sample_id = sample_point_list[sample_range.x + sample_offset + s];
                 const FLOAT* sample = samples + sample_id * D;
 
-                for (int k = 0; k < D; k++)  X[k] = mean[k] - sample[k];
+                for (int k = 0; k < D; k++) {
+                    X[k] = mean[k] - sample[k];
+#ifdef TORUS
+                    if (abs(X[k]) > 1.0) {
+                        if (X[k] >= 0) {
+                            X[k] = fmod(X[k], 2.0) - 2.0;
+                        } else {
+                            X[k] = fmod(X[k], 2.0) + 2.0;
+                        }
+                    }
+#endif
+                }
 
                 F(X, con, value, dL_dout_values, dL_dmeans + id * D, dL_dvalues + id * C, dL_dconics + id * D * (D + 1) / 2, sample_id, D, C);
             }

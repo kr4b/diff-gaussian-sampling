@@ -16,6 +16,7 @@
 #define CUDA_SAMPLER_CONFIG_H_INCLUDED
 
 #define BLOCK_SIZE 0.51f
+#define TORUS
 typedef float FLOAT;
 
 #endif
