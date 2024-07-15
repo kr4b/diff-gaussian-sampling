@@ -1,3 +1,8 @@
+/*
+ * The following code is not in any way a modified version of the diff-gaussian-rasterization. 
+ * As such, it is not restricted by the same license.
+ */
+
 #include "cuda_sampler/auxiliary.h"
 
 #include <math.h>

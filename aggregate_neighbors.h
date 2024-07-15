@@ -1,3 +1,8 @@
+/*
+ * The following code is not in any way a modified version of the diff-gaussian-rasterization. 
+ * Therefore, it is not restricted by the same license.
+ */
+
 #pragma once
 #include <torch/extension.h>
 #include <cstdio>
